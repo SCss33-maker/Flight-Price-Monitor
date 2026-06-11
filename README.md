@@ -29,7 +29,7 @@
 | 層 | 採用技術 |
 |---|---|
 | 資料來源 | SerpAPI（Google Flights 即時查價） |
-| 排程自動化 | GitHub Actions（每兩週定時觸發） |
+| 排程自動化 | GitHub Actions（每兩週定時觸發，暫定每月1號跟15號） |
 | 查價腳本 | Python（純標準函式庫，無第三方相依） |
 | 前端介面 | 原生 HTML / CSS / JavaScript ＋ Chart.js |
 | 資料儲存 | JSON（以版本控制保存歷史） |

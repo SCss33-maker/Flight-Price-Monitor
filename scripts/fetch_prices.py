@@ -158,16 +158,19 @@ def main():
                 print(f"{route_key} {depart}: {e}，跳過")
                 continue
             finally:
-                time.sleep(1)  # 友善節流
+                time.sleep(0.3)  # 友善節流
             if resp.get("error"):
-                print(f"{route_key} {depart}: SerpAPI 回報 {resp['error']}，跳過")
+                print(f"  {route_key} {depart}: SerpAPI 回報 {resp['error']}，跳過", flush=True)
                 continue
             offers = (resp.get("best_flights") or []) + (resp.get("other_flights") or [])
             offers = [o for o in offers if o.get("price")]
             if not offers:
+                print(f"  {route_key} {depart}: 無報價", flush=True)
                 continue
             best = min((summarize(o, cfg, legs) for o in offers), key=lambda s: s["estWithBag"])
             best["returnDate"] = ret.isoformat()
+            print(f"  [{used}/{budget}] {route_key} {depart}: {best['price']} {best['airline']}"
+                  f"{'' if best['bagIncluded'] else '＋行李'}", flush=True)
             scanned[depart.isoformat()] = best
             history = route["datePriceHistory"].setdefault(depart.isoformat(), [])
             history.append([today_iso, best["price"]])

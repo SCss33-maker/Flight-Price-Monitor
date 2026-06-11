@@ -11,6 +11,7 @@ SerpAPI 一次呼叫只回傳「一組去回日期」的多筆航班，免費額
 環境變數：
   SERPAPI_API_KEY   SerpAPI 金鑰（必填）
   FORCE_ROUTES      逗號分隔目的地代碼或 ALL，限定本次掃描的航線（手動觸發用）
+  MAX_QUERIES       本次最多再花幾次查詢（測試用，省額度）；0 或未設 = 不額外限制
 """
 import json
 import os
@@ -35,20 +36,32 @@ def load_json(path, fallback):
         return fallback
 
 
-def serpapi_search(params, retries=2):
-    """呼叫一次 SerpAPI，回傳解析後的 JSON dict。"""
+def serpapi_search(params, max_attempts=3):
+    """呼叫 SerpAPI，必要時重試（429 或空結果）。
+
+    回傳 (結果 dict, 實際呼叫次數)。每次 HTTP 請求都會消耗額度，
+    所以把次數一起回傳給呼叫端，好精準計入每月用量。
+    """
     url = ENDPOINT + "?" + urllib.parse.urlencode(params)
-    for attempt in range(retries + 1):
+    result = {}
+    attempts = 0
+    while attempts < max_attempts:
+        attempts += 1
         try:
-            with urllib.request.urlopen(url, timeout=60) as resp:
-                return json.load(resp)
+            with urllib.request.urlopen(url, timeout=120) as resp:
+                result = json.load(resp)
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < retries:  # 速率限制，退避後重試
-                time.sleep(3 * (attempt + 1))
+            if e.code == 429 and attempts < max_attempts:  # 速率限制，退避後重試
+                time.sleep(3 * attempts)
                 continue
             body = e.read().decode("utf-8", "ignore")[:200]
-            raise RuntimeError(f"HTTP {e.code}: {body}") from e
-    return {}
+            return {"error": f"HTTP {e.code}: {body}"}, attempts
+        # Google Flights 偶爾回空結果，再試一次往往就有
+        if "returned any results" in (result.get("error") or "") and attempts < max_attempts:
+            time.sleep(1.5)
+            continue
+        break
+    return result, attempts
 
 
 def display_airline(name, name_map):
@@ -113,20 +126,23 @@ def main():
     month_key = today.strftime("%Y-%m")
     usage = (data.get("meta") or {}).get("apiUsage", {})
     used = usage.get(month_key, 0)
-    budget = cfg.get("monthlyCallBudget", 240)
+    budget = cfg.get("monthlyCallBudget", 245)
+    # MAX_QUERIES：本次最多再花幾次（測試用，省額度）；0 或未設 = 不額外限制
+    max_q = int(os.environ.get("MAX_QUERIES", "0") or 0)
+    cap = budget if max_q <= 0 else min(budget, used + max_q)
 
     force = [s.strip().upper() for s in os.environ.get("FORCE_ROUTES", "").split(",") if s.strip()]
     targets = cfg["destinations"]
     if force and force != ["ALL"]:
         targets = [d for d in cfg["destinations"] if d in force]
-    print(f"本月已用 {used}/{budget} 次，本次掃描航線：{targets}")
+    print(f"本月已用 {used}/{budget} 次，本次上限 {cap}，掃描航線：{targets}", flush=True)
 
     legs = 2  # 來回兩段，行李費以兩段估算
     step = max(1, cfg.get("scanStepDays", 3))
 
     for dest in targets:
-        if used >= budget:
-            print(f"已達本月額度上限 {budget}，停止")
+        if used >= cap:
+            print(f"已達上限 {cap}，停止", flush=True)
             break
         route_key = f'{cfg["origin"]}-{dest}'
         route = data["routes"].setdefault(
@@ -134,8 +150,8 @@ def main():
         )
         scanned = {}
         for offset in range(cfg.get("leadDays", 3), cfg["scanWindowDays"] + 1, step):
-            if used >= budget:
-                print(f"已達本月額度上限 {budget}，提前停止")
+            if used >= cap:
+                print(f"已達上限 {cap}，提前停止", flush=True)
                 break
             depart = today + timedelta(days=offset)
             ret = depart + timedelta(days=cfg["stayNights"])
@@ -149,16 +165,13 @@ def main():
                 "adults": cfg.get("adults", 1),
                 "currency": cfg.get("currency", "TWD"),
                 "hl": "zh-tw",
+                "gl": "tw",
+                "deep_search": "true",  # 等結果完整載入，避免回空結果
                 "api_key": api_key,
             }
-            used += 1
-            try:
-                resp = serpapi_search(params)
-            except RuntimeError as e:
-                print(f"{route_key} {depart}: {e}，跳過")
-                continue
-            finally:
-                time.sleep(0.3)  # 友善節流
+            resp, calls = serpapi_search(params)
+            used += calls  # 連同重試一起計入額度
+            time.sleep(0.3)  # 友善節流
             if resp.get("error"):
                 print(f"  {route_key} {depart}: SerpAPI 回報 {resp['error']}，跳過", flush=True)
                 continue

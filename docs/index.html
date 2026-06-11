@@ -77,9 +77,11 @@
   .cell.min-cell::after {
     content: "★"; position: absolute; top: 2px; right: 4px; font-size: 10px; color: #fff;
   }
-  .legend { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--muted); }
+  .legend { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .legend b { color: var(--text); font-weight: 700; }
+  .legend .muted { color: var(--muted); }
   .legend .scale { width: 140px; height: 10px; border-radius: 5px;
-    background: linear-gradient(90deg, hsl(145,65%,42%), hsl(60,70%,45%), hsl(0,65%,52%)); }
+    background: linear-gradient(90deg, hsl(150,65%,40%), hsl(75,75%,46%), hsl(0,85%,52%)); }
 
   .detail {
     margin-top: 14px; padding: 12px 14px; border-radius: 10px; font-size: 14px;
@@ -143,7 +145,8 @@
     <div class="card">
       <h2>出發日價格月曆（5 天 4 夜來回總價・點日期看明細）</h2>
       <div class="months" id="months"></div>
-      <div class="legend">便宜 <span class="scale"></span> 貴　★ = 期間最低　灰色 = 無資料</div>
+      <div class="legend">便宜 <b id="legMin">—</b> <span class="scale"></span> <b id="legMax">—</b> 貴
+        　<span class="muted">（SGN／DAD 共用色階）　★ = 本航線最低　灰色 = 無資料</span></div>
       <div class="detail" id="detailBox"></div>
     </div>
 
@@ -189,9 +192,24 @@ function airlineName(code) {
   return (DATA.meta.airlineNames || {})[code] || code;
 }
 
-function priceColor(v, min, max) {
-  const t = max > min ? (v - min) / (max - min) : 0;
-  return `hsl(${Math.round(145 - 145 * t)}, 65%, ${Math.round(42 + 10 * t)}%)`;
+// 把「所有航線、目前口徑」的價格收集起來排序，讓 SGN/DAD 共用同一個顏色尺度
+function globalSorted() {
+  const vals = [];
+  for (const k in DATA.routes) {
+    const lat = DATA.routes[k].latest || {};
+    for (const d in lat) vals.push(lat[d][metric]);
+  }
+  return vals.sort((a, b) => a - b);
+}
+
+// 用「在所有價格中的排名（百分位）」上色：密集的便宜區也能拉開層次，且兩航線可直接比
+function colorFor(v, sorted) {
+  const n = sorted.length;
+  if (n < 2) return "hsl(150,65%,42%)";
+  let lo = 0, hi = n;                        // 找第一個 >= v 的位置
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] < v) lo = mid + 1; else hi = mid; }
+  const p = lo / (n - 1);                    // 0 = 最便宜，1 = 最貴
+  return `hsl(${Math.round(150 - 150 * p)}, ${Math.round(65 + 20 * p)}%, ${Math.round(40 + 12 * p)}%)`;
 }
 
 function init() {
@@ -255,12 +273,17 @@ function render() {
   $("statScanInfo").textContent = "每兩週完整掃描一次（未來 60 天每一天）";
   $("metaNote").textContent = `資料更新：${(DATA.meta.updatedAt || "").slice(0, 10)}`;
 
-  renderCalendar(entries, min, max);
+  // 跨航線共用的色階：圖例兩端標上全域最低/最高
+  const sorted = globalSorted();
+  $("legMin").textContent = fmtMoney(sorted[0]);
+  $("legMax").textContent = fmtMoney(sorted[sorted.length - 1]);
+
+  renderCalendar(entries, min, sorted);
   renderCheapTable(entries, min);
   renderTrend();
 }
 
-function renderCalendar(entries, min, max) {
+function renderCalendar(entries, routeMin, sorted) {
   const byDate = Object.fromEntries(entries);
   const months = {};
   entries.forEach(([d]) => { months[d.slice(0, 7)] = true; });
@@ -276,8 +299,8 @@ function renderCalendar(entries, min, max) {
       const rec = byDate[iso];
       if (!rec) { cells += `<div class="cell"><span class="d">${d}</span></div>`; continue; }
       const v = rec[metric];
-      const cls = "cell has" + (v === min ? " min-cell" : "");
-      cells += `<div class="${cls}" data-d="${iso}" style="background:${priceColor(v, min, max)}">` +
+      const cls = "cell has" + (v === routeMin ? " min-cell" : "");
+      cells += `<div class="${cls}" data-d="${iso}" style="background:${colorFor(v, sorted)}">` +
         `<span class="d">${d}</span><span class="p">${fmtShort(v)}</span></div>`;
     }
     const title = `${y} 年 ${m} 月`;

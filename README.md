@@ -1,91 +1,41 @@
 # 越南機票比價平台 ✈️
 
-每天自動掃描 **台北(TPE) → 胡志明(SGN) / 峴港(DAD)** 未來 60 天、5 天 4 夜來回的最低票價，
-做成價格月曆與比價表，放在 GitHub Pages 上分享給朋友看。
+> 自動追蹤台北飛越南的每日機票價格，用價格月曆找出最便宜的出發日。
 
-## 運作方式
+一個零維護、零成本的個人機票比價工具。每天自動向航空訂位系統查詢未來各出發日的來回票價，
+彙整成視覺化的價格月曆與比價表，並以網頁形式分享。特別針對廉價航空「票面便宜、加了行李反而更貴」
+的痛點，提供**含托運行李的估算總價**，讓比價更貼近真實付款金額。
 
-```
-GitHub Actions（每天台北時間 09:10 自動執行）
-  └─ scripts/fetch_prices.py 呼叫 Amadeus Flight Offers Search API
-       └─ 兩條航線每天輪流掃描（控制在免費額度內）
-            └─ 結果累積到 docs/data.json（git 就是歷史紀錄）
-                 └─ docs/index.html（GitHub Pages）讀取並呈現
-```
+## 功能特色
 
-特色：
+- **🗓️ 價格月曆熱力圖** — 把未來 60 天每個出發日的來回總價畫成顏色深淺，綠便宜、紅貴、★ 標示期間最低，一眼看出該挑哪天走。
 
-- **價格月曆熱力圖**：一眼看出哪天出發最便宜（綠＝便宜、紅＝貴、★＝期間最低）。
-- **含行李估算**：廉航票面價未含托運行李時，依 `config.json` 的行李加購價目表
-  自動估算「含 20kg 行李總價」，避免「票面便宜、加行李變貴」的陷阱。
-- **額度保險絲**：每月 API 呼叫次數記錄在 data.json，達 `monthlyCallBudget`（預設 1,900）即自動停止。
+- **🧳 含行李估算總價** — 自動判讀票價是否已含托運行李；廉航未含行李時，依航空公司行李加購價目自動加總，算出「含 20kg 行李」的實付估算價，避免廉航的隱藏成本陷阱。
 
-## 部署步驟
+- **🔁 票面價 ／ 含行李 雙口徑切換** — 月曆、比價表、統計卡可一鍵切換兩種計價方式，純比票面或比實付都行。
 
-### 1. 申請 Amadeus API 金鑰（免費）
+- **📊 最便宜十日榜與走勢圖** — 自動列出區間內最划算的 10 個出發日，並追蹤「窗內最低價」隨時間的變化，掌握何時是下手時機。
 
-1. 到 <https://developers.amadeus.com/> 註冊帳號。
-2. My Self-Service Workspace → Create New App，取得 **API Key / API Secret**。
-3. 預設拿到的是 **test 環境**金鑰：可以跑通流程，但價格是樣本資料、非真實票價。
-   驗證沒問題後，在後台把 App 升級到 **production**（免費額度不變，每月約 2,000 次查價），
-   換用 production 金鑰才是真實報價。
+- **🛫 多航線監控** — 內建台北 → 胡志明、台北 → 峴港兩條航線，可自由增減目的地。
 
-### 2. 推上 GitHub
+- **🤖 全自動、免伺服器** — 透過排程機器人每日在雲端自動查價、更新資料，個人電腦無需開機或安裝任何東西。
 
-```bash
-git remote add origin https://github.com/<你的帳號>/<repo名>.git
-git push -u origin main
-```
+- **📈 完整歷史紀錄** — 每日價格快照逐日累積，可回溯任一出發日的歷史價格變化趨勢。
 
-### 3. 設定 Secrets 與變數
+- **🆓 完全免費** — 建構於免費的航空查價額度與免費的雲端託管之上，無任何訂閱費用。
 
-GitHub repo → Settings → Secrets and variables → Actions：
+## 技術架構
 
-| 類型 | 名稱 | 值 |
-|---|---|---|
-| Secret | `AMADEUS_CLIENT_ID` | Amadeus API Key |
-| Secret | `AMADEUS_CLIENT_SECRET` | Amadeus API Secret |
-| Variable | `AMADEUS_ENV` | `test` 或 `production`（不設定預設 test） |
-
-### 4. 開啟 GitHub Pages
-
-Settings → Pages → Source 選 **Deploy from a branch**，Branch 選 `main`、資料夾選 `/docs`。
-幾分鐘後網址會是 `https://<你的帳號>.github.io/<repo名>/`，把這個網址丟給朋友即可。
-
-### 5. 手動跑第一次
-
-Actions → 「每日機票價格掃描」→ Run workflow，
-`routes` 填 `ALL` 可一次掃兩條航線（其後排程會自動每天輪流掃）。
-
-## 調整設定（config.json）
-
-| 欄位 | 說明 |
+| 層 | 採用技術 |
 |---|---|
-| `destinations` | 監控的目的地機場代碼，可增減（航線越多越吃額度） |
-| `stayNights` | 來回固定停留晚數（預設 4 = 5 天 4 夜） |
-| `scanWindowDays` | 往後掃描幾天（預設 60） |
-| `leadDays` | 略過最近幾天內出發的票（預設 3） |
-| `baggageFeePerLegTWD` | 各航空「單程一段 20kg 托運」加購估算價（台幣）。**目前是粗估值，請依航空公司官網價目表更新**，查無代碼時用 `default` |
-| `monthlyCallBudget` | 每月 API 呼叫上限保險絲 |
+| 資料來源 | Amadeus Flight Offers Search API |
+| 排程自動化 | GitHub Actions（每日定時觸發） |
+| 查價腳本 | Python（純標準函式庫，無第三方相依） |
+| 前端介面 | 原生 HTML / CSS / JavaScript ＋ Chart.js |
+| 資料儲存 | JSON（以版本控制保存歷史） |
+| 網頁託管 | GitHub Pages |
 
-額度試算：`航線數 ÷ 2 × (scanWindowDays - leadDays + 1) × 30` ≈ 每月呼叫次數，
-請保持在 Amadeus 免費額度（約 2,000 次/月）以內。
+## 資料說明
 
-## 本機測試
-
-```powershell
-$env:AMADEUS_CLIENT_ID = "你的Key"
-$env:AMADEUS_CLIENT_SECRET = "你的Secret"
-$env:AMADEUS_ENV = "test"
-$env:FORCE_ROUTES = "ALL"
-python scripts/fetch_prices.py
-# 然後在 docs/ 目錄起個靜態伺服器看頁面
-python -m http.server 8000 -d docs
-```
-
-## 已知限制
-
-- Amadeus test 環境的價格是樣本資料，僅供驗證流程；真實價格需切換 production 金鑰。
-- 廉航（如越捷）已加入 Amadeus 系統，但個別促銷價（官網限定）仍可能查不到，下訂前建議去官網再確認一次。
-- 行李加購價是估算值（靜態價目表），非即時查價。
-- 票價為查詢當下快照，實際購買價格以訂票網站／航空公司為準。
+票價為查詢當下的來回每人總價快照，僅供比較與挑選出發日參考，實際金額以航空公司／訂票平台的即時報價為準。
+含行李估算採用靜態價目表推算，非即時行李查價；部分廉航的官網限定促銷價可能未涵蓋，建議下訂前再行確認。

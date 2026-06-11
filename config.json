@@ -1,0 +1,30 @@
+{
+  "origin": "TPE",
+  "destinations": ["SGN", "DAD"],
+  "stayNights": 4,
+  "scanWindowDays": 60,
+  "leadDays": 3,
+  "adults": 1,
+  "currency": "TWD",
+  "maxOffersPerQuery": 5,
+  "monthlyCallBudget": 1900,
+  "_note_baggageFee": "單程一段 20kg 托運行李的加購估算價（台幣）。僅用於票價不含行李時的估算，請依各航空官網價目表更新。",
+  "baggageFeePerLegTWD": {
+    "VJ": 450,
+    "default": 800
+  },
+  "airlineNames": {
+    "VJ": "越捷航空",
+    "VN": "越南航空",
+    "CI": "中華航空",
+    "BR": "長榮航空",
+    "JX": "星宇航空",
+    "QH": "越竹航空",
+    "BL": "太平洋航空",
+    "IT": "台灣虎航",
+    "TR": "酷航",
+    "CX": "國泰航空",
+    "HX": "香港航空",
+    "MF": "廈門航空"
+  }
+}

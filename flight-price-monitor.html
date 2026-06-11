@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>機票價格監控 Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --card2: #273449;
+    --line: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .demo-tag {
+    display: inline-block; background: var(--warn); color: #1a1a1a;
+    font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    vertical-align: middle; margin-left: 8px;
+  }
+  .grid { display: grid; gap: 16px; }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 720px) { .cols-3 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
+
+  /* route config */
+  .route-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 20px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--muted); }
+  .field input, .field select {
+    background: var(--card2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; font-size: 14px; min-width: 96px;
+  }
+  .btn {
+    background: var(--accent); color: #04263a; border: none; cursor: pointer;
+    border-radius: 8px; padding: 9px 16px; font-size: 14px; font-weight: 600;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  .btn.ghost:hover { color: var(--text); }
+
+  /* stat cards */
+  .stat { text-align: left; }
+  .stat .num { font-size: 28px; font-weight: 700; }
+  .stat .label { font-size: 12px; color: var(--muted); }
+  .stat .delta { font-size: 12px; margin-top: 4px; }
+  .up { color: var(--bad); } .down { color: var(--good); } .flat { color: var(--muted); }
+
+  /* alert banner */
+  .alert {
+    border-radius: 10px; padding: 12px 16px; margin: 16px 0; font-size: 14px;
+    display: flex; gap: 10px; align-items: center;
+  }
+  .alert.good { background: rgba(52,211,153,.12); border: 1px solid var(--good); color: var(--good); }
+  .alert.warn { background: rgba(251,191,36,.12); border: 1px solid var(--warn); color: var(--warn); }
+  .alert .big { font-size: 18px; font-weight: 700; }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: right; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tbody tr:hover { background: var(--card2); }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 10px; }
+  .pill.low { background: rgba(52,211,153,.18); color: var(--good); }
+  .pill.high { background: rgba(248,113,113,.18); color: var(--bad); }
+  .chart-box { position: relative; height: 300px; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 28px; line-height: 1.7; }
+  code { background: var(--card2); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>機票價格每日監控 <span class="demo-tag">DEMO・假資料</span></h1>
+  <div class="sub">每天抓一次價格 → 累積成每日紀錄。資料存在瀏覽器本機 (localStorage)。</div>
+
+  <!-- 航線設定 -->
+  <div class="route-bar">
+    <div class="field">
+      <label>出發地</label>
+      <input id="origin" value="TPE" maxlength="3">
+    </div>
+    <div class="field">
+      <label>目的地</label>
+      <input id="dest" value="NRT" maxlength="3">
+    </div>
+    <div class="field">
+      <label>去程日期</label>
+      <input id="depart" type="date">
+    </div>
+    <div class="field">
+      <label>回程日期</label>
+      <input id="return" type="date">
+    </div>
+    <div class="field">
+      <label>幣別</label>
+      <select id="currency">
+        <option>TWD</option><option>JPY</option><option>USD</option>
+      </select>
+    </div>
+    <button class="btn" id="fetchBtn">📡 抓今天價格</button>
+    <button class="btn ghost" id="resetBtn">重置資料</button>
+  </div>
+
+  <!-- 統計卡 -->
+  <div class="grid cols-3" style="margin-bottom:16px;">
+    <div class="card stat">
+      <div class="label">今日價格</div>
+      <div class="num" id="todayPrice">—</div>
+      <div class="delta" id="todayDelta"></div>
+    </div>
+    <div class="card stat">
+      <div class="label">期間最低價</div>
+      <div class="num" id="minPrice" style="color:var(--good)">—</div>
+      <div class="delta" id="minDate"></div>
+    </div>
+    <div class="card stat">
+      <div class="label">期間平均價</div>
+      <div class="num" id="avgPrice">—</div>
+      <div class="delta" id="rangeInfo"></div>
+    </div>
+  </div>
+
+  <!-- 最低價提醒 -->
+  <div id="alertBox"></div>
+
+  <!-- 折線圖 -->
+  <div class="card">
+    <h2>價格走勢</h2>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
+  </div>
+
+  <!-- 每日表格 -->
+  <div class="card" style="margin-top:16px;">
+    <h2>每日價格紀錄</h2>
+    <table>
+      <thead>
+        <tr><th>日期</th><th>航空公司</th><th>轉機</th><th>價格</th><th>較前日</th><th></th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="foot">
+    <strong>這是假資料 Demo。</strong> 要接真實資料，只需把程式裡的 <code>fakeFetchPrice()</code> 換成真 API 呼叫
+    （建議 Amadeus Self-Service 免費方案），並用 <strong>Windows 工作排程器</strong>每天自動執行一次抓價腳本即可。
+    瀏覽器前端因 CORS 限制無法直接呼叫機票 API，正式版抓價要放在後端腳本，前端只負責讀資料畫表格。
+  </div>
+</div>
+
+<script>
+// ====================================================================
+// 設定
+// ====================================================================
+const STORAGE_KEY = "flightPriceMonitor.v1";
+const AIRLINES = ["中華航空", "長榮航空", "星宇航空", "日本航空", "全日空", "樂桃航空", "酷航"];
+
+// 每條航線一個合理的基準價（TWD），用 出發-目的 當 key
+const BASE_PRICES = {
+  "TPE-NRT": 12000, "TPE-KIX": 11000, "TPE-HKG": 6500,
+  "TPE-ICN": 9000,  "TPE-BKK": 8500,  "TPE-SIN": 11500,
+};
+
+// ====================================================================
+// 「假 API」—— 正式版把這個函式換成真 API 呼叫即可
+// 回傳格式: { price, airline, stops }
+// ====================================================================
+function fakeFetchPrice(origin, dest, dayIndex) {
+  const key = `${origin}-${dest}`.toUpperCase();
+  const base = BASE_PRICES[key] || 10000;
+  // 用 dayIndex 當種子做平滑波動（週末偏貴 + 隨機噪音）
+  const wave = Math.sin(dayIndex / 3) * 0.08;          // 緩慢起伏 ±8%
+  const weekend = (dayIndex % 7 === 5 || dayIndex % 7 === 6) ? 0.06 : 0; // 週末 +6%
+  const noise = (pseudoRand(dayIndex) - 0.5) * 0.10;   // 隨機 ±5%
+  const price = Math.round((base * (1 + wave + weekend + noise)) / 100) * 100;
+  const airline = AIRLINES[Math.floor(pseudoRand(dayIndex * 7) * AIRLINES.length)];
+  const stops = pseudoRand(dayIndex * 13) > 0.65 ? 1 : 0;
+  return { price, airline, stops };
+}
+
+// 可重現的偽隨機（同一個 seed 永遠回傳同一個值，讓歷史資料穩定）
+function pseudoRand(seed) {
+  const x = Math.sin(seed * 99991 + 17) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+// ====================================================================
+// 資料存取
+// ====================================================================
+function loadData() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || null; }
+  catch { return null; }
+}
+function saveData(d) { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); }
+
+function todayStr(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
+}
+
+// 第一次開啟：塞 14 天歷史假資料
+function seedHistory() {
+  const origin = document.getElementById("origin").value.toUpperCase();
+  const dest = document.getElementById("dest").value.toUpperCase();
+  const records = [];
+  for (let i = 13; i >= 0; i--) {
+    const r = fakeFetchPrice(origin, dest, 100 - i);
+    records.push({ date: todayStr(-i), ...r });
+  }
+  return { origin, dest, records };
+}
+
+// ====================================================================
+// 抓今天價格（模擬每日排程的單次執行）
+// ====================================================================
+function fetchToday() {
+  let data = loadData() || seedHistory();
+  const origin = document.getElementById("origin").value.toUpperCase();
+  const dest = document.getElementById("dest").value.toUpperCase();
+
+  // 換航線就重新建立資料集
+  if (data.origin !== origin || data.dest !== dest) {
+    document.getElementById("origin").value = origin;
+    document.getElementById("dest").value = dest;
+    data = seedHistory();
+  }
+
+  const today = todayStr();
+  const seed = 200 + data.records.length; // 讓每次抓的值不同
+  const r = fakeFetchPrice(origin, dest, seed);
+  const existing = data.records.find(x => x.date === today);
+  if (existing) {
+    Object.assign(existing, r); // 同一天再抓就更新
+  } else {
+    data.records.push({ date: today, ...r });
+  }
+  saveData(data);
+  render();
+}
+
+// ====================================================================
+// 渲染
+// ====================================================================
+let chart;
+function render() {
+  const data = loadData();
+  if (!data || !data.records.length) return;
+  const recs = data.records.slice().sort((a, b) => a.date.localeCompare(b.date));
+
+  const prices = recs.map(r => r.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const avg = Math.round(prices.reduce((a, b) => a + b, 0) / prices.length);
+  const minRec = recs.find(r => r.price === min);
+  const last = recs[recs.length - 1];
+  const prev = recs.length > 1 ? recs[recs.length - 2] : null;
+  const cur = document.getElementById("currency").value;
+  const fmt = n => `${cur} ${n.toLocaleString()}`;
+
+  // 統計卡
+  document.getElementById("todayPrice").textContent = fmt(last.price);
+  document.getElementById("minPrice").textContent = fmt(min);
+  document.getElementById("minDate").textContent = `出現於 ${minRec.date}`;
+  document.getElementById("avgPrice").textContent = fmt(avg);
+  document.getElementById("rangeInfo").textContent =
+    `${recs[0].date} ~ ${last.date}・共 ${recs.length} 天`;
+
+  // 今日 vs 前日
+  const delta = document.getElementById("todayDelta");
+  if (prev) {
+    const diff = last.price - prev.price;
+    const pct = ((diff / prev.price) * 100).toFixed(1);
+    if (diff > 0) delta.innerHTML = `<span class="up">▲ ${fmt(diff)} (+${pct}%)</span>`;
+    else if (diff < 0) delta.innerHTML = `<span class="down">▼ ${fmt(-diff)} (${pct}%)</span>`;
+    else delta.innerHTML = `<span class="flat">— 與前日相同</span>`;
+  } else delta.textContent = "";
+
+  // 最低價提醒
+  const alertBox = document.getElementById("alertBox");
+  const vsAvg = (((last.price - avg) / avg) * 100).toFixed(1);
+  if (last.price <= min) {
+    alertBox.innerHTML = `<div class="alert good">🎯 <span><span class="big">現在是期間最低價！</span>
+      ${fmt(last.price)}，比平均低 ${Math.abs(vsAvg)}% — 是好的下手時機。</span></div>`;
+  } else if (last.price <= avg) {
+    alertBox.innerHTML = `<div class="alert good">✅ <span>今日 ${fmt(last.price)}，
+      <strong>低於平均 ${Math.abs(vsAvg)}%</strong>，價格不錯。距最低價還差 ${fmt(last.price - min)}。</span></div>`;
+  } else {
+    alertBox.innerHTML = `<div class="alert warn">⏳ <span>今日 ${fmt(last.price)}，
+      <strong>高於平均 ${vsAvg}%</strong>，可再觀望。期間最低為 ${fmt(min)} (${minRec.date})。</span></div>`;
+  }
+
+  // 表格
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = recs.slice().reverse().map((r, idx, arr) => {
+    const older = arr[idx + 1];
+    let deltaCell = "—";
+    if (older) {
+      const d = r.price - older.price;
+      if (d > 0) deltaCell = `<span class="up">▲ ${d.toLocaleString()}</span>`;
+      else if (d < 0) deltaCell = `<span class="down">▼ ${(-d).toLocaleString()}</span>`;
+    }
+    let pill = "";
+    if (r.price === min) pill = `<span class="pill low">最低</span>`;
+    else if (r.price === max) pill = `<span class="pill high">最高</span>`;
+    return `<tr>
+      <td>${r.date}</td>
+      <td>${r.airline}</td>
+      <td>${r.stops === 0 ? "直飛" : r.stops + " 轉"}</td>
+      <td>${fmt(r.price)}</td>
+      <td>${deltaCell}</td>
+      <td>${pill}</td>
+    </tr>`;
+  }).join("");
+
+  // 折線圖
+  const labels = recs.map(r => r.date.slice(5));
+  const ctx = document.getElementById("chart");
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: `${cur} 價格`,
+          data: prices,
+          borderColor: "#38bdf8",
+          backgroundColor: "rgba(56,189,248,.12)",
+          fill: true, tension: .3, pointRadius: 3,
+          pointBackgroundColor: prices.map(p => p === min ? "#34d399" : "#38bdf8"),
+          pointRadius: prices.map(p => p === min ? 6 : 3),
+        },
+        {
+          label: "平均", data: prices.map(() => avg),
+          borderColor: "#fbbf24", borderDash: [6, 4], pointRadius: 0, fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: "#94a3b8" } } },
+      scales: {
+        x: { ticks: { color: "#94a3b8" }, grid: { color: "#1e293b" } },
+        y: { ticks: { color: "#94a3b8" }, grid: { color: "#1e293b" } },
+      },
+    },
+  });
+}
+
+// ====================================================================
+// 初始化
+// ====================================================================
+document.getElementById("depart").value = todayStr(30);
+document.getElementById("return").value = todayStr(37);
+document.getElementById("fetchBtn").onclick = fetchToday;
+document.getElementById("currency").onchange = render;
+document.getElementById("resetBtn").onclick = () => {
+  if (confirm("確定清除所有紀錄並重新產生假資料？")) {
+    localStorage.removeItem(STORAGE_KEY);
+    saveData(seedHistory());
+    render();
+  }
+};
+
+// 第一次開啟自動塞歷史資料
+if (!loadData()) saveData(seedHistory());
+render();
+</script>
+</body>
+</html>

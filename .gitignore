@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+
+# 不想上傳到 GitHub 的檔案（留在本機就好）
+GitHub教學與專案使用指南.md

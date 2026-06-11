@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>越南機票比價 — 每日掃描</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --card2: #273449;
+    --line: #334155;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--muted); font-weight: 600; }
+
+  .banner {
+    border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; font-size: 13px;
+    background: rgba(251,191,36,.12); border: 1px solid var(--warn); color: var(--warn);
+  }
+  .banner.info { background: rgba(56,189,248,.1); border-color: var(--accent); color: var(--accent); }
+
+  /* tabs + toggle */
+  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
+  .tabs, .toggle { display: flex; gap: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+  .tabs button, .toggle button {
+    background: transparent; color: var(--muted); border: none; cursor: pointer;
+    border-radius: 7px; padding: 7px 14px; font-size: 14px; font-weight: 600;
+  }
+  .tabs button.on, .toggle button.on { background: var(--accent); color: #04263a; }
+  .spacer { flex: 1; }
+  .meta-note { color: var(--muted); font-size: 12px; }
+
+  /* stat cards */
+  .grid3 { display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); margin-bottom: 16px; }
+  @media (max-width: 720px) { .grid3 { grid-template-columns: 1fr; } }
+  .stat .label { font-size: 12px; color: var(--muted); }
+  .stat .num { font-size: 26px; font-weight: 700; }
+  .stat .delta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* calendar */
+  .months { display: flex; flex-wrap: wrap; gap: 20px; }
+  .month { flex: 1 1 300px; max-width: 360px; }
+  .month h3 { font-size: 14px; margin: 0 0 8px; color: var(--text); }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .cal .dow { text-align: center; font-size: 11px; color: var(--muted); padding: 2px 0; }
+  .cell {
+    border-radius: 7px; min-height: 46px; padding: 4px 5px; font-size: 11px;
+    background: var(--card2); color: var(--muted); position: relative; cursor: default;
+  }
+  .cell.has { cursor: pointer; color: #fff; }
+  .cell.has:hover { outline: 2px solid var(--accent); }
+  .cell.sel { outline: 2px solid #fff; }
+  .cell .d { opacity: .85; }
+  .cell .p { display: block; font-weight: 700; font-size: 12px; }
+  .cell.min-cell::after {
+    content: "★"; position: absolute; top: 2px; right: 4px; font-size: 10px; color: #fff;
+  }
+  .legend { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 12px; color: var(--muted); }
+  .legend .scale { width: 140px; height: 10px; border-radius: 5px;
+    background: linear-gradient(90deg, hsl(145,65%,42%), hsl(60,70%,45%), hsl(0,65%,52%)); }
+
+  .detail {
+    margin-top: 14px; padding: 12px 14px; border-radius: 10px; font-size: 14px;
+    background: var(--card2); border: 1px solid var(--line); display: none;
+  }
+  .detail.show { display: block; }
+  .detail b { color: var(--accent); }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: right; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2),
+  th:nth-child(3), td:nth-child(3) { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tbody tr:hover { background: var(--card2); }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 10px; white-space: nowrap; }
+  .pill.low { background: rgba(52,211,153,.18); color: var(--good); }
+  .pill.bag { background: rgba(56,189,248,.16); color: var(--accent); }
+  .pill.nobag { background: rgba(251,191,36,.16); color: var(--warn); }
+
+  .chart-box { position: relative; height: 280px; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 24px; line-height: 1.8; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>✈️ 越南機票比價</h1>
+  <div class="sub" id="subtitle">載入中…</div>
+  <div id="bannerBox"></div>
+
+  <div id="app" style="display:none;">
+    <div class="bar">
+      <div class="tabs" id="routeTabs"></div>
+      <div class="toggle" id="metricToggle">
+        <button data-m="estWithBag" class="on">含 20kg 行李估算</button>
+        <button data-m="price">票面價</button>
+      </div>
+      <div class="spacer"></div>
+      <div class="meta-note" id="metaNote"></div>
+    </div>
+
+    <div class="grid3">
+      <div class="card stat">
+        <div class="label">期間最低（依目前顯示口徑）</div>
+        <div class="num" id="statMin" style="color:var(--good)">—</div>
+        <div class="delta" id="statMinInfo"></div>
+      </div>
+      <div class="card stat">
+        <div class="label">期間平均</div>
+        <div class="num" id="statAvg">—</div>
+        <div class="delta" id="statAvgInfo"></div>
+      </div>
+      <div class="card stat">
+        <div class="label">最近掃描</div>
+        <div class="num" id="statScan" style="font-size:20px;">—</div>
+        <div class="delta" id="statScanInfo"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>出發日價格月曆（5 天 4 夜來回總價・點日期看明細）</h2>
+      <div class="months" id="months"></div>
+      <div class="legend">便宜 <span class="scale"></span> 貴　★ = 期間最低　灰色 = 無資料</div>
+      <div class="detail" id="detailBox"></div>
+    </div>
+
+    <div class="card">
+      <h2>最便宜的 10 個出發日</h2>
+      <table>
+        <thead>
+          <tr><th>出發</th><th>回程</th><th>航空公司</th><th>轉機</th><th>行李</th><th>票面價</th><th>含行李估算</th><th></th></tr>
+        </thead>
+        <tbody id="cheapBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>「窗內最低價」走勢（每次掃描時，掃描範圍內的最低含行李估算價）</h2>
+      <div class="chart-box"><canvas id="trendChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="empty" id="emptyBox" style="display:none;">
+    還沒有價格資料。等 GitHub Actions 第一次排程跑完（或手動觸發一次 workflow）後，這裡就會出現價格月曆。
+  </div>
+
+  <div class="foot">
+    票價為掃描當下查得的<strong>來回每人總價</strong>，實際下訂以航空公司／訂票網站為準。<br>
+    「含行李估算」：票價未含托運行李時，依設定檔中的行李加購價目（每段一件 20kg）估算加總，僅供比較參考。
+  </div>
+</div>
+
+<script>
+let DATA = null;
+let route = null;          // 目前分頁的航線 key，如 "TPE-SGN"
+let metric = "estWithBag"; // 或 "price"
+let trendChart = null;
+
+const $ = id => document.getElementById(id);
+const fmtMoney = n => "NT$ " + Math.round(n).toLocaleString();
+const fmtShort = n => n >= 10000 ? (n / 1000).toFixed(1) + "k" : (n / 1000).toFixed(1) + "k";
+const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+const wd = iso => "週" + WEEKDAYS[new Date(iso + "T00:00:00").getDay()];
+
+function airlineName(code) {
+  return (DATA.meta.airlineNames || {})[code] || code;
+}
+
+function priceColor(v, min, max) {
+  const t = max > min ? (v - min) / (max - min) : 0;
+  return `hsl(${Math.round(145 - 145 * t)}, 65%, ${Math.round(42 + 10 * t)}%)`;
+}
+
+function init() {
+  fetch("data.json?t=" + Date.now())
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(d => {
+      DATA = d;
+      const keys = Object.keys(d.routes || {}).filter(k => Object.keys(d.routes[k].latest || {}).length);
+      if (!keys.length) { showEmpty(); return; }
+      buildBanner();
+      buildTabs(keys);
+      route = keys[0];
+      $("app").style.display = "";
+      $("subtitle").textContent =
+        `每日自動掃描 台北(${d.meta.origin}) 出發、${d.meta.stayNights} 晚來回的未來票價，找出最便宜的出發日。`;
+      render();
+    })
+    .catch(showEmpty);
+}
+
+function showEmpty() {
+  $("subtitle").textContent = "每日自動掃描未來票價，找出最便宜的出發日。";
+  $("emptyBox").style.display = "";
+}
+
+function buildBanner() {
+  if (DATA.meta.env === "test") {
+    $("bannerBox").innerHTML =
+      `<div class="banner">⚠️ 目前使用 Amadeus <b>測試環境</b>金鑰，價格為樣本資料、非真實票價。換成 production 金鑰後即為真實報價。</div>`;
+  }
+}
+
+function buildTabs(keys) {
+  $("routeTabs").innerHTML = keys.map(k =>
+    `<button data-r="${k}">${k.replace("-", " → ")}</button>`).join("");
+  $("routeTabs").querySelectorAll("button").forEach(b => {
+    b.onclick = () => { route = b.dataset.r; render(); };
+  });
+  $("metricToggle").querySelectorAll("button").forEach(b => {
+    b.onclick = () => { metric = b.dataset.m; render(); };
+  });
+}
+
+function render() {
+  document.querySelectorAll("#routeTabs button").forEach(b =>
+    b.classList.toggle("on", b.dataset.r === route));
+  document.querySelectorAll("#metricToggle button").forEach(b =>
+    b.classList.toggle("on", b.dataset.m === metric));
+  $("detailBox").className = "detail";
+
+  const r = DATA.routes[route];
+  const entries = Object.entries(r.latest).sort((a, b) => a[0].localeCompare(b[0]));
+  const vals = entries.map(([, v]) => v[metric]);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const minEntry = entries.find(([, v]) => v[metric] === min);
+
+  $("statMin").textContent = fmtMoney(min);
+  $("statMinInfo").textContent = `${minEntry[0]}（${wd(minEntry[0])}）出發・${airlineName(minEntry[1].airline)}`;
+  $("statAvg").textContent = fmtMoney(avg);
+  $("statAvgInfo").textContent = `${entries[0][0]} ~ ${entries[entries.length - 1][0]}・共 ${entries.length} 個出發日`;
+  $("statScan").textContent = r.lastScan || "—";
+  $("statScanInfo").textContent = "兩條航線每日輪流更新，各約兩天刷新一次";
+  $("metaNote").textContent = `資料更新：${(DATA.meta.updatedAt || "").slice(0, 10)}`;
+
+  renderCalendar(entries, min, max);
+  renderCheapTable(entries, min);
+  renderTrend();
+}
+
+function renderCalendar(entries, min, max) {
+  const byDate = Object.fromEntries(entries);
+  const months = {};
+  entries.forEach(([d]) => { months[d.slice(0, 7)] = true; });
+
+  $("months").innerHTML = Object.keys(months).sort().map(ym => {
+    const [y, m] = ym.split("-").map(Number);
+    const first = new Date(y, m - 1, 1);
+    const days = new Date(y, m, 0).getDate();
+    let cells = WEEKDAYS.map(w => `<div class="dow">${w}</div>`).join("");
+    cells += `<div class="cell" style="background:transparent;"></div>`.repeat(first.getDay());
+    for (let d = 1; d <= days; d++) {
+      const iso = `${ym}-${String(d).padStart(2, "0")}`;
+      const rec = byDate[iso];
+      if (!rec) { cells += `<div class="cell"><span class="d">${d}</span></div>`; continue; }
+      const v = rec[metric];
+      const cls = "cell has" + (v === min ? " min-cell" : "");
+      cells += `<div class="${cls}" data-d="${iso}" style="background:${priceColor(v, min, max)}">` +
+        `<span class="d">${d}</span><span class="p">${fmtShort(v)}</span></div>`;
+    }
+    const title = `${y} 年 ${m} 月`;
+    return `<div class="month"><h3>${title}</h3><div class="cal">${cells}</div></div>`;
+  }).join("");
+
+  $("months").querySelectorAll(".cell.has").forEach(c => {
+    c.onclick = () => showDetail(c.dataset.d, c);
+  });
+}
+
+function showDetail(iso, cell) {
+  document.querySelectorAll(".cell.sel").forEach(c => c.classList.remove("sel"));
+  cell.classList.add("sel");
+  const rec = DATA.routes[route].latest[iso];
+  const hist = (DATA.routes[route].datePriceHistory || {})[iso] || [];
+  let trendNote = "";
+  if (hist.length >= 2) {
+    const prev = hist[hist.length - 2][1];
+    const diff = rec.price - prev;
+    if (diff > 0) trendNote = `，比上次掃描 <span style="color:var(--bad)">▲ ${diff.toLocaleString()}</span>`;
+    else if (diff < 0) trendNote = `，比上次掃描 <span style="color:var(--good)">▼ ${(-diff).toLocaleString()}</span>`;
+    else trendNote = "，與上次掃描相同";
+  }
+  const box = $("detailBox");
+  box.className = "detail show";
+  box.innerHTML =
+    `<b>${iso}（${wd(iso)}）出發 → ${rec.returnDate}（${wd(rec.returnDate)}）回</b>　` +
+    `${airlineName(rec.airline)}・${rec.stops === 0 ? "直飛" : rec.stops + " 轉"}　|　` +
+    `票面 ${fmtMoney(rec.price)}　` +
+    (rec.bagIncluded
+      ? `<span class="pill bag">已含托運行李</span>`
+      : `含行李估算 <b>${fmtMoney(rec.estWithBag)}</b> <span class="pill nobag">票價不含托運</span>`) +
+    trendNote;
+}
+
+function renderCheapTable(entries, min) {
+  const top = entries.slice().sort((a, b) => a[1][metric] - b[1][metric]).slice(0, 10);
+  $("cheapBody").innerHTML = top.map(([d, v]) => `<tr>
+    <td>${d}（${wd(d)}）</td>
+    <td>${v.returnDate}（${wd(v.returnDate)}）</td>
+    <td>${airlineName(v.airline)}</td>
+    <td>${v.stops === 0 ? "直飛" : v.stops + " 轉"}</td>
+    <td>${v.bagIncluded ? `<span class="pill bag">已含</span>` : `<span class="pill nobag">需加購</span>`}</td>
+    <td>${fmtMoney(v.price)}</td>
+    <td><strong>${fmtMoney(v.estWithBag)}</strong></td>
+    <td>${v[metric] === min ? `<span class="pill low">最低</span>` : ""}</td>
+  </tr>`).join("");
+}
+
+function renderTrend() {
+  const colors = ["#38bdf8", "#fbbf24", "#34d399", "#f87171"];
+  const keys = Object.keys(DATA.routes);
+  const labels = [...new Set(keys.flatMap(k =>
+    (DATA.routes[k].minHistory || []).map(h => h[0])))].sort();
+  const datasets = keys.map((k, i) => {
+    const byScan = Object.fromEntries((DATA.routes[k].minHistory || []).map(h => [h[0], h[1]]));
+    return {
+      label: k.replace("-", "→"),
+      data: labels.map(l => byScan[l] ?? null),
+      borderColor: colors[i % colors.length],
+      spanGaps: true, tension: .3, pointRadius: 3, fill: false,
+    };
+  });
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart($("trendChart"), {
+    type: "line",
+    data: { labels: labels.map(l => l.slice(5)), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: "#94a3b8" } } },
+      scales: {
+        x: { ticks: { color: "#94a3b8" }, grid: { color: "#1e293b" } },
+        y: { ticks: { color: "#94a3b8" }, grid: { color: "#1e293b" } },
+      },
+    },
+  });
+}
+
+init();
+</script>
+</body>
+</html>

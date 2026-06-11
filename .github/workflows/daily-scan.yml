@@ -1,0 +1,45 @@
+name: 每日機票價格掃描
+
+on:
+  schedule:
+    # UTC 01:10 = 台北時間 09:10
+    - cron: "10 1 * * *"
+  workflow_dispatch:
+    inputs:
+      routes:
+        description: "強制掃描的目的地（逗號分隔，如 SGN,DAD；填 ALL 掃全部）"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: price-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 抓取價格
+        env:
+          AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
+          AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
+          AMADEUS_ENV: ${{ vars.AMADEUS_ENV || 'test' }}
+          FORCE_ROUTES: ${{ github.event.inputs.routes }}
+        run: python scripts/fetch_prices.py
+
+      - name: 提交資料
+        run: |
+          git config user.name "price-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/data.json
+          git diff --cached --quiet || git commit -m "price scan $(date -u +%F)"
+          git push

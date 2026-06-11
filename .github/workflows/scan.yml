@@ -1,13 +1,13 @@
-name: 每日機票價格掃描
+name: 機票價格掃描（每兩週）
 
 on:
   schedule:
-    # UTC 01:10 = 台北時間 09:10
-    - cron: "10 1 * * *"
+    # 每月 1 號與 15 號 UTC 01:10 = 台北時間 09:10（完整掃 60 天，免費額度約每月 2 趟）
+    - cron: "10 1 1,15 * *"
   workflow_dispatch:
     inputs:
       routes:
-        description: "強制掃描的目的地（逗號分隔，如 SGN,DAD；填 ALL 掃全部）"
+        description: "限定掃描的目的地（逗號分隔，如 SGN,DAD；填 ALL 掃全部）"
         required: false
         default: ""
 
@@ -30,9 +30,7 @@ jobs:
 
       - name: 抓取價格
         env:
-          AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
-          AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
-          AMADEUS_ENV: ${{ vars.AMADEUS_ENV || 'test' }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
           FORCE_ROUTES: ${{ github.event.inputs.routes }}
         run: python scripts/fetch_prices.py
 

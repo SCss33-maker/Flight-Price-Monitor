@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""每日機票價格掃描。
+"""機票價格掃描（資料來源：SerpAPI Google Flights）。
 
-呼叫 Amadeus Flight Offers Search API，掃描設定檔中各航線
-「未來 N 天每個出發日」的來回最低價，結果累積到 docs/data.json，
-由 GitHub Pages 上的靜態網頁讀取呈現。
+對設定檔中每條航線，掃描未來 scanWindowDays 天內、每隔 scanStepDays 天取樣的
+出發日，查 5 天 4 夜來回最低總價，累積到 docs/data.json 供前端網頁呈現。
+
+SerpAPI 一次呼叫只回傳「一組去回日期」的多筆航班，免費額度約 250 次/月，
+因此採「每兩週完整掃一次（排程在每月 1 號、15 號）」把用量壓在額度內，
+並以 monthlyCallBudget 當保險絲。
 
 環境變數：
-  AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET  Amadeus API 金鑰（必填）
-  AMADEUS_ENV    test（預設，假價格驗證流程用）或 production（真實價格）
-  FORCE_ROUTES   逗號分隔的目的地代碼或 ALL，強制掃描指定航線（手動觸發用）
-
-額度控制：免費額度有限，預設兩條航線「每天輪流掃一條」，
-並在 data.json 記錄每月已用次數，達到 monthlyCallBudget 即停止。
+  SERPAPI_API_KEY   SerpAPI 金鑰（必填）
+  FORCE_ROUTES      逗號分隔目的地代碼或 ALL，限定本次掃描的航線（手動觸發用）
 """
 import json
 import os
@@ -25,11 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 DATA_PATH = os.path.join(ROOT, "docs", "data.json")
-
-HOSTS = {
-    "test": "https://test.api.amadeus.com",
-    "production": "https://api.amadeus.com",
-}
+ENDPOINT = "https://serpapi.com/search.json"
 
 
 def load_json(path, fallback):
@@ -40,94 +35,77 @@ def load_json(path, fallback):
         return fallback
 
 
-def get_token(host, client_id, client_secret):
-    body = urllib.parse.urlencode({
-        "grant_type": "client_credentials",
-        "client_id": client_id,
-        "client_secret": client_secret,
-    }).encode()
-    req = urllib.request.Request(
-        host + "/v1/security/oauth2/token",
-        data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)["access_token"]
-
-
-def search_offers(host, token, params, retries=2):
-    url = host + "/v2/shopping/flight-offers?" + urllib.parse.urlencode(params)
+def serpapi_search(params, retries=2):
+    """呼叫一次 SerpAPI，回傳解析後的 JSON dict。"""
+    url = ENDPOINT + "?" + urllib.parse.urlencode(params)
     for attempt in range(retries + 1):
-        req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return json.load(resp).get("data", [])
+            with urllib.request.urlopen(url, timeout=60) as resp:
+                return json.load(resp)
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < retries:  # rate limit，退避後重試
+            if e.code == 429 and attempt < retries:  # 速率限制，退避後重試
                 time.sleep(3 * (attempt + 1))
                 continue
-            if e.code in (400, 404):  # 該日期查無航班之類的，當作沒資料
-                return []
-            raise
-    return []
+            body = e.read().decode("utf-8", "ignore")[:200]
+            raise RuntimeError(f"HTTP {e.code}: {body}") from e
+    return {}
 
 
-def included_checked_bags(offer):
-    """這筆報價是否已含托運行李（依件數或重量判斷）。"""
-    try:
-        fare = offer["travelerPricings"][0]["fareDetailsBySegment"][0]
-        bags = fare.get("includedCheckedBags") or {}
-        if bags.get("quantity"):
+def display_airline(name, name_map):
+    """把 SerpAPI 的英文航空名稱正規化成中文（關鍵字比對），查無則原樣回傳。"""
+    low = (name or "").lower()
+    for key, zh in name_map.items():
+        if key.lower() in low:
+            return zh
+    return name or "—"
+
+
+def baggage_fee(name, fee_map, legs):
+    low = (name or "").lower()
+    for key, fee in fee_map.items():
+        if key == "default":
+            continue
+        if key.lower() in low:
+            return fee * legs
+    return fee_map.get("default", 800) * legs
+
+
+def includes_checked_bag(offer):
+    """從 extensions 文字盡力判斷是否已含托運行李；判斷不出來時回 None。"""
+    for ext in offer.get("extensions", []) or []:
+        e = ext.lower()
+        if "free checked" in e or "checked bag included" in e:
             return True
-        if bags.get("weight") and float(bags["weight"]) >= 15:
-            return True
-    except (KeyError, IndexError, TypeError, ValueError):
-        pass
-    return False
+        if "checked baggage for a fee" in e or "no checked" in e:
+            return False
+    return None
 
 
-def summarize(offer, cfg):
-    """取出一筆報價的關鍵欄位，並估算含行李總價。"""
-    price = float(offer["price"]["grandTotal"])
-    itineraries = offer["itineraries"]
-    first_seg = itineraries[0]["segments"][0]
-    carriers = offer.get("validatingAirlineCodes") or [first_seg["carrierCode"]]
-    carrier = carriers[0]
-    stops = max(len(it["segments"]) - 1 for it in itineraries)
-    has_bag = included_checked_bags(offer)
-    fees = cfg.get("baggageFeePerLegTWD", {})
-    bag_fee = 0 if has_bag else fees.get(carrier, fees.get("default", 800)) * len(itineraries)
+def summarize(offer, cfg, legs):
+    """把一筆 SerpAPI 航班報價整理成我們要存的欄位。"""
+    price = round(float(offer["price"]))
+    segments = offer.get("flights", []) or []
+    carrier_raw = segments[0].get("airline") if segments else None
+    carrier = display_airline(carrier_raw, cfg.get("airlineNames", {}))
+    stops = len(offer.get("layovers", []) or [])
+    has_bag = includes_checked_bag(offer)
+    fee = 0 if has_bag else baggage_fee(carrier_raw, cfg.get("baggageFeePerLegTWD", {}), legs)
     return {
-        "price": round(price),
+        "price": price,
         "airline": carrier,
         "stops": stops,
-        "bagIncluded": has_bag,
-        "estWithBag": round(price + bag_fee),
+        "bagIncluded": bool(has_bag),
+        "estWithBag": price + fee,
     }
-
-
-def routes_for_today(destinations, today, force):
-    if force == ["ALL"]:
-        return list(destinations)
-    if force:
-        return [d for d in destinations if d in force]
-    if len(destinations) <= 1:
-        return list(destinations)
-    # 多條航線每天輪流掃，分攤 API 額度（兩條航線時各自每兩天更新一次）
-    ordered = sorted(destinations)
-    return [d for i, d in enumerate(ordered) if i % 2 == today.toordinal() % 2]
 
 
 def main():
     cfg = load_json(CONFIG_PATH, None)
     if not cfg:
         sys.exit("讀不到 config.json")
-    client_id = os.environ.get("AMADEUS_CLIENT_ID")
-    client_secret = os.environ.get("AMADEUS_CLIENT_SECRET")
-    if not client_id or not client_secret:
-        sys.exit("請設定 AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET 環境變數")
-    env = os.environ.get("AMADEUS_ENV", "test")
-    host = HOSTS.get(env, HOSTS["test"])
+    api_key = os.environ.get("SERPAPI_API_KEY")
+    if not api_key:
+        sys.exit("請設定 SERPAPI_API_KEY 環境變數")
 
     data = load_json(DATA_PATH, {"meta": {}, "routes": {}})
     today = date.today()
@@ -135,53 +113,65 @@ def main():
     month_key = today.strftime("%Y-%m")
     usage = (data.get("meta") or {}).get("apiUsage", {})
     used = usage.get(month_key, 0)
-    budget = cfg.get("monthlyCallBudget", 1900)
+    budget = cfg.get("monthlyCallBudget", 240)
 
     force = [s.strip().upper() for s in os.environ.get("FORCE_ROUTES", "").split(",") if s.strip()]
-    targets = routes_for_today(cfg["destinations"], today, force)
-    print(f"環境={env} 本月已用 {used}/{budget} 次，今日掃描：{targets}")
+    targets = cfg["destinations"]
+    if force and force != ["ALL"]:
+        targets = [d for d in cfg["destinations"] if d in force]
+    print(f"本月已用 {used}/{budget} 次，本次掃描航線：{targets}")
 
-    token = get_token(host, client_id, client_secret)
+    legs = 2  # 來回兩段，行李費以兩段估算
+    step = max(1, cfg.get("scanStepDays", 3))
 
     for dest in targets:
         if used >= budget:
+            print(f"已達本月額度上限 {budget}，停止")
             break
         route_key = f'{cfg["origin"]}-{dest}'
         route = data["routes"].setdefault(
             route_key, {"latest": {}, "datePriceHistory": {}, "minHistory": []}
         )
         scanned = {}
-        for offset in range(cfg.get("leadDays", 3), cfg["scanWindowDays"] + 1):
+        for offset in range(cfg.get("leadDays", 3), cfg["scanWindowDays"] + 1, step):
             if used >= budget:
                 print(f"已達本月額度上限 {budget}，提前停止")
                 break
             depart = today + timedelta(days=offset)
             ret = depart + timedelta(days=cfg["stayNights"])
             params = {
-                "originLocationCode": cfg["origin"],
-                "destinationLocationCode": dest,
-                "departureDate": depart.isoformat(),
-                "returnDate": ret.isoformat(),
+                "engine": "google_flights",
+                "departure_id": cfg["origin"],
+                "arrival_id": dest,
+                "outbound_date": depart.isoformat(),
+                "return_date": ret.isoformat(),
+                "type": "1",  # 1 = 來回
                 "adults": cfg.get("adults", 1),
-                "currencyCode": cfg.get("currency", "TWD"),
-                "max": cfg.get("maxOffersPerQuery", 5),
+                "currency": cfg.get("currency", "TWD"),
+                "hl": "zh-tw",
+                "api_key": api_key,
             }
             used += 1
             try:
-                offers = search_offers(host, token, params)
-            except urllib.error.HTTPError as e:
-                print(f"{route_key} {depart}: HTTP {e.code}，跳過")
+                resp = serpapi_search(params)
+            except RuntimeError as e:
+                print(f"{route_key} {depart}: {e}，跳過")
                 continue
             finally:
-                time.sleep(0.2)  # 控制 TPS，避免 429
+                time.sleep(1)  # 友善節流
+            if resp.get("error"):
+                print(f"{route_key} {depart}: SerpAPI 回報 {resp['error']}，跳過")
+                continue
+            offers = (resp.get("best_flights") or []) + (resp.get("other_flights") or [])
+            offers = [o for o in offers if o.get("price")]
             if not offers:
                 continue
-            best = min((summarize(o, cfg) for o in offers), key=lambda s: s["estWithBag"])
+            best = min((summarize(o, cfg, legs) for o in offers), key=lambda s: s["estWithBag"])
             best["returnDate"] = ret.isoformat()
             scanned[depart.isoformat()] = best
             history = route["datePriceHistory"].setdefault(depart.isoformat(), [])
             history.append([today_iso, best["price"]])
-            del history[:-120]
+            del history[:-60]
 
         if scanned:
             route["latest"].update(scanned)
@@ -202,13 +192,12 @@ def main():
     usage[month_key] = used
     data["meta"] = {
         "apiUsage": dict(sorted(usage.items())[-3:]),
-        "env": env,
+        "source": "SerpAPI · Google Flights",
         "updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "origin": cfg["origin"],
         "stayNights": cfg["stayNights"],
         "currency": cfg.get("currency", "TWD"),
-        "airlineNames": cfg.get("airlineNames", {}),
-        "baggageFeePerLegTWD": cfg.get("baggageFeePerLegTWD", {}),
+        "scanStepDays": step,
     }
     os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
     with open(DATA_PATH, "w", encoding="utf-8") as f:

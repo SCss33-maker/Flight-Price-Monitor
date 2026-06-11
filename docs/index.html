@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>越南機票比價 — 每日掃描</title>
+<title>越南機票比價 — 價格月曆</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root {
@@ -206,22 +206,20 @@ function init() {
       route = keys[0];
       $("app").style.display = "";
       $("subtitle").textContent =
-        `每日自動掃描 台北(${d.meta.origin}) 出發、${d.meta.stayNights} 晚來回的未來票價，找出最便宜的出發日。`;
+        `每兩週完整掃描 台北(${d.meta.origin}) 出發、${d.meta.stayNights} 晚來回的未來 60 天票價，找出最便宜的出發日。`;
       render();
     })
     .catch(showEmpty);
 }
 
 function showEmpty() {
-  $("subtitle").textContent = "每日自動掃描未來票價，找出最便宜的出發日。";
+  $("subtitle").textContent = "每兩週完整掃描未來票價，找出最便宜的出發日。";
   $("emptyBox").style.display = "";
 }
 
 function buildBanner() {
-  if (DATA.meta.env === "test") {
-    $("bannerBox").innerHTML =
-      `<div class="banner">⚠️ 目前使用 Amadeus <b>測試環境</b>金鑰，價格為樣本資料、非真實票價。換成 production 金鑰後即為真實報價。</div>`;
-  }
+  $("bannerBox").innerHTML =
+    `<div class="banner info">ℹ️ 資料來源：${DATA.meta.source || "Google Flights"}・每兩週更新一次，用途是挑出便宜的出發日；決定好日期後請以訂票網站即時價為準。</div>`;
 }
 
 function buildTabs(keys) {
@@ -254,7 +252,7 @@ function render() {
   $("statAvg").textContent = fmtMoney(avg);
   $("statAvgInfo").textContent = `${entries[0][0]} ~ ${entries[entries.length - 1][0]}・共 ${entries.length} 個出發日`;
   $("statScan").textContent = r.lastScan || "—";
-  $("statScanInfo").textContent = "兩條航線每日輪流更新，各約兩天刷新一次";
+  $("statScanInfo").textContent = "每兩週完整掃描一次（未來 60 天每一天）";
   $("metaNote").textContent = `資料更新：${(DATA.meta.updatedAt || "").slice(0, 10)}`;
 
   renderCalendar(entries, min, max);

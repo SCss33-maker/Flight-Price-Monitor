@@ -514,6 +514,7 @@ init();
   let heading = 0, speed = 0;            // 航向（弧度）與速度：飛機每幀最多轉一點點
   let docked = false;                    // 已停在滑鼠上（機頭凍結，移遠才再出發）
   let parking = false;                   // 進站中（持續到停妥，不會中途脫離）
+  let flipped = false;                   // 朝左飛時垂直鏡像，避免肚皮朝天
   let rollStart = 0, rollFromX = 0, rollToX = 0, rollY = 0;
   let lastPuffX = 0, lastPuffY = 0;
   const ROLL_MS = 850;
@@ -535,9 +536,18 @@ init();
     tx = e.clientX; ty = e.clientY;
     rollStart = performance.now();
     state = "roll";
+    flipped = false;
     titleIcon.style.visibility = "hidden";   // 圖示消失＝飛機離開了原位
     plane.style.opacity = "1";
   });
+
+  function finishLanding() {
+    state = "done";                          // 降落完成：圖示回歸、本頁不再起飛
+    plane.style.opacity = "0";
+    titleIcon.style.visibility = "visible";
+    landBtn.disabled = true;
+    landBtn.textContent = "🛬 已降落";
+  }
 
   // 降落鈕：呼叫小飛機回場降落
   landBtn.addEventListener("click", () => {
@@ -566,37 +576,50 @@ init();
         heading = 0;                        // 離地航向＝跑道方向（朝右）
         speed = Math.max(px - prevx, 3);    // 接住滑行末速，銜接無縫
       }
-    } else if (state === "fly" || state === "land" || state === "final") {
-      // 目標：飛行＝滑鼠；降落進場＝跑道左外側的定位點；最後進場＝圖示本身
-      let ix = 0, iy = 0;
+    } else if (state === "fly" || state === "land" || state === "final" || state === "rollout") {
+      // 目標：飛行＝滑鼠；進場＝跑道右外側定位點；最後進場＝「價」字端觸地；滑行＝圖示
+      let ix = 0, iy = 0, tdX = 0;
       if (state !== "fly") {
         const r = titleIcon.getBoundingClientRect();
         ix = r.left + r.width / 2;
         iy = r.top + r.height / 2;
+        const range = document.createRange();              // 跑道右端＝起飛離地的「價」字處
+        range.selectNodeContents(titleIcon.parentElement);
+        tdX = range.getBoundingClientRect().right - 6;
       }
       let gx = tx, gy = ty;
-      if (state === "land") { gx = Math.max(ix - 230, -60); gy = iy - 80; }
-      else if (state === "final") { gx = ix; gy = iy; }
+      if (state === "land") { gx = Math.min(tdX + 230, innerWidth - 24); gy = iy - 80; }
+      else if (state === "final") { gx = tdX; gy = iy; }
+      else if (state === "rollout") { gx = ix; gy = iy; }
       const dx = gx - px, dy = gy - py;
       const dist = Math.hypot(dx, dy);
-      const draw = () => plane.style.transform =
-        `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${heading * 180 / Math.PI + TILT}deg)`;
+      const draw = () => {
+        const deg = heading * 180 / Math.PI;
+        const a = Math.abs(heading);
+        if (!flipped && a > 1.75) flipped = true;          // 朝左飛 → 垂直鏡像（帶遲滯防閃爍）
+        else if (flipped && a < 1.40) flipped = false;
+        plane.style.transform = flipped
+          ? `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${deg - TILT}deg) scaleY(-1)`
+          : `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${deg + TILT}deg)`;
+      };
 
-      if (state === "final") {
-        // 最後進場：和起飛同方向（朝右）沿淺下滑道滑進圖示，越來越慢、輕輕落地
-        px += dx * 0.05;
-        py += dy * 0.085;                          // 垂直收斂稍快 → 軌跡越來越平
-        let hd = -heading;                         // 機頭緩緩轉回水平（取短邊）
+      if (state === "rollout") {
+        // 觸地後：沿標題向左滑行減速、停回圖示原位——起飛的倒帶
+        px += dx * 0.045;
+        py = iy;
+        heading = Math.PI;
+        speed = 0;
+        if (Math.abs(dx) < 1.2) finishLanding(); else draw();
+      } else if (state === "final") {
+        // 最後進場：從右側對正跑道（機頭朝左），沿淺下滑道滑向「價」字端觸地
+        px += dx * 0.055;
+        py += dy * 0.085;                          // 垂直收斂稍快 → 進場軌跡越來越平
+        let hd = Math.PI - heading;                // 機頭緩緩轉向跑道方向（取短邊）
         hd = ((hd + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
         heading += hd * 0.09;
+        heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
         speed = 0;
-        if (dist < 1.3) {
-          state = "done";                          // 降落完成：圖示回歸、本頁不再起飛
-          plane.style.opacity = "0";
-          titleIcon.style.visibility = "visible";
-          landBtn.disabled = true;
-          landBtn.textContent = "🛬 已降落";
-        } else draw();
+        if (dist < 2) state = "rollout"; else draw();
       } else if (state === "land" && dist < 26) {
         state = "final";                           // 抵達定位點 → 轉入最後進場
       } else if (docked) {
@@ -615,11 +638,22 @@ init();
           draw();
         }
       } else {
-        // 巡航：最小轉彎半徑 26px（轉向速率 ≤ 速度÷半徑）→ 物理上不可能原地甩頭
+        // 巡航：最小轉彎半徑（轉向速率 ≤ 速度÷半徑）→ 物理上不可能原地甩頭
         const maxTurn = Math.min(0.034, Math.max(speed / 26, 0.012));
         let diff = Math.atan2(dy, dx) - heading;
         diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;   // 正規化到 [-π, π]
-        heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+
+        // 目標在「即將轉向那一側」的最小轉彎圓內 → 物理上轉不到，會無限繞圈。
+        // 解法：看目標陷入圓內多深，平滑地由「朝目標轉」過渡為「往外側讓圈」，
+        // 把轉彎圓漂移到目標剛好落在圓周上 → 繞回來時自然撞上目標（半徑不變）
+        const side = diff >= 0 ? 1 : -1;
+        const R = speed / maxTurn;
+        const ccx = px + Math.cos(heading + side * Math.PI / 2) * R;
+        const ccy = py + Math.sin(heading + side * Math.PI / 2) * R;
+        const toC = Math.hypot(gx - ccx, gy - ccy);
+        const k = Math.max(0, Math.min(1, (toC - R * 0.72) / (R * 0.33)));  // 0=深陷圓心 1=圓外
+        if (k >= 1) heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+        else heading += side * maxTurn * (2 * k - 1);
         heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
         // 等減速剎停曲線：更早、更緩地減速，靠近時自然慢下來

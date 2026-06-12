@@ -384,9 +384,7 @@ init();
 </script>
 
 <!-- 🛩️ 跟著滑鼠飛的小飛機 + 速度控制 -->
-<svg id="planeCursor" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
-  <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" fill="#38bdf8"/>
-</svg>
+<div id="planeCursor" aria-hidden="true">✈️</div>
 <div id="planeCtrl">
   <span class="pc-title">✈️ 小飛機速度</span>
   <input id="planeSpeed" type="range" min="1" max="100" value="18">
@@ -395,6 +393,7 @@ init();
 <style>
   #planeCursor {
     position: fixed; left: 0; top: 0; z-index: 9998; opacity: 0;
+    font-size: 26px; line-height: 1;   /* 用和標題同一顆 ✈️ emoji，外觀完全一致 */
     pointer-events: none; will-change: transform;
     filter: drop-shadow(0 2px 3px rgba(0,0,0,.45));
   }
@@ -429,12 +428,15 @@ init();
   const valOut = document.getElementById("planeSpeedVal");
   const titleIcon = document.getElementById("titleIcon");
 
+  // Segoe 的 ✈️ 機頭本來就朝右上約 45°，旋轉時加回補償讓機頭對準飛行方向
+  const TILT = 45;
+
   // 記住上次的速度設定
   const saved = parseInt(localStorage.getItem("planeSpeed"), 10);
   if (saved >= 1 && saved <= 100) slider.value = saved;
   valOut.textContent = slider.value;
 
-  // 滑桿(1~100) → 追逐係數(0.01~0.175)：數字越大追越快（整體比上一版慢一半）
+  // 滑桿(1~100) → 追逐係數(0.01~0.175)：數字越大追越快
   const easeOf = s => 0.01 + (s - 1) / 99 * 0.165;
   let ease = easeOf(+slider.value);
   slider.addEventListener("input", () => {
@@ -443,26 +445,31 @@ init();
     localStorage.setItem("planeSpeed", slider.value);
   });
 
-  let state = "idle";              // idle → intro（從標題飛出繞圈）→ follow（跟滑鼠）
+  // 狀態機：idle（待機）→ roll（沿標題滑行起飛）→ air（隨意繞圈、漸漸貼近）→ follow（跟著滑鼠）
+  let state = "idle";
   let px = 0, py = 0, prevx = 0, prevy = 0, tx = innerWidth / 2, ty = innerHeight / 2;
-  let angle = 0, introStart = 0, cx = 0, cy = 0;
-  let lastPuffX = 0, lastPuffY = 0;
-  const INTRO_MS = 2800, LOOPS = 2.5;
+  let angle = 0, lastPuffX = 0, lastPuffY = 0;
+  let rollStart = 0, rollFromX = 0, rollToX = 0, rollY = 0;
+  let cx = 0, cy = 0, phi = 0, radius = 0;   // air：繞圈圓心、相位、半徑
+  const ROLL_MS = 950;
 
   addEventListener("mousemove", e => { tx = e.clientX; ty = e.clientY; });
 
-  // 第一次點滑鼠：小飛機從標題那顆 ✈️ 飛出來
+  // 第一次點滑鼠：標題那顆 ✈️ 真的飛走——沿「越南機票比價」這行字當跑道起飛
   addEventListener("mousedown", e => {
     if (state !== "idle") return;
-    const r = titleIcon.getBoundingClientRect();
-    px = prevx = lastPuffX = r.left + r.width / 2;
-    py = prevy = lastPuffY = r.top + r.height / 2;
-    cx = px + 60; cy = py;            // 繞圈圓心：讓起點正好落在標題圖示上
+    const ir = titleIcon.getBoundingClientRect();
+    const tr = titleIcon.parentElement.getBoundingClientRect();  // 整行標題＝跑道
+    px = prevx = lastPuffX = ir.left + ir.width / 2;
+    py = prevy = lastPuffY = rollY = ir.top + ir.height / 2;
+    rollFromX = px;
+    rollToX = tr.right - 8;
     tx = e.clientX; ty = e.clientY;
-    introStart = performance.now();
-    state = "intro";
+    rollStart = performance.now();
+    state = "roll";
+    titleIcon.style.visibility = "hidden";   // 圖示消失＝飛機離開了原位
     plane.style.opacity = "1";
-  }, { once: false });
+  });
 
   function puff(x, y) {
     const d = document.createElement("div");
@@ -476,25 +483,43 @@ init();
   function loop(now) {
     if (state !== "idle") {
       prevx = px; prevy = py;
-      if (state === "intro") {
-        const prog = Math.min((now - introStart) / INTRO_MS, 1);
-        const ang = prog * LOOPS * Math.PI * 2;
-        const R = 60 + 40 * prog;                 // 邊繞邊往外鬆開一點
-        px = cx + R * Math.cos(ang + Math.PI);    // 從標題位置起飛
-        py = cy + R * Math.sin(ang + Math.PI);
-        if (prog >= 1) state = "follow";
-      } else {                                     // follow：緩緩追向滑鼠
+
+      if (state === "roll") {
+        // 沿標題文字加速滑行（t² → 越滑越快），機頭維持水平
+        const t = Math.min((now - rollStart) / ROLL_MS, 1);
+        px = rollFromX + (rollToX - rollFromX) * t * t;
+        py = rollY;
+        if (t >= 1) {                 // 離地！銜接到繞圈飛行
+          state = "air";
+          cx = px; cy = py - 70;      // 圓心設在頭頂，起點正好接住目前位置
+          radius = 70;
+          phi = Math.PI / 2;
+        }
+      } else if (state === "air") {
+        // 沒有固定圈數：圓心緩緩飄向滑鼠、半徑慢慢縮小、轉速帶點呼吸感
+        cx += (tx - cx) * 0.012;
+        cy += (ty - cy) * 0.012;
+        phi -= 0.028 + 0.014 * Math.sin(now * 0.0007);
+        radius *= 0.9955;
+        const r = radius * (1 + 0.18 * Math.sin(now * 0.0009));
+        const gx = cx + r * Math.cos(phi), gy = cy + r * Math.sin(phi);
+        px += (gx - px) * 0.08;
+        py += (gy - py) * 0.08;
+        if (radius < 9) state = "follow";   // 圈圈縮到貼住滑鼠，自然轉為跟隨
+      } else {
+        // follow：緩緩追向滑鼠
         px += (tx - px) * ease;
         py += (ty - py) * ease;
       }
-      const mvx = px - prevx, mvy = py - prevy;
-      if (Math.hypot(mvx, mvy) > 0.1) angle = Math.atan2(mvy, mvx) * 180 / Math.PI + 90;
-      plane.style.transform = `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${angle}deg)`;
 
-      // 尾流：每移動一小段就在機尾留一朵白雲，隨後慢慢消散
-      if (Math.hypot(px - lastPuffX, py - lastPuffY) >= 10) {
+      const mvx = px - prevx, mvy = py - prevy;
+      if (Math.hypot(mvx, mvy) > 0.1) angle = Math.atan2(mvy, mvx) * 180 / Math.PI;
+      plane.style.transform = `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${angle + TILT}deg)`;
+
+      // 尾流白雲：離地後才有，沿途留下、慢慢放大消散
+      if (state !== "roll" && Math.hypot(px - lastPuffX, py - lastPuffY) >= 10) {
         const len = Math.hypot(mvx, mvy) || 1;
-        puff(px - mvx / len * 12, py - mvy / len * 12);
+        puff(px - mvx / len * 14, py - mvy / len * 14);
         lastPuffX = px; lastPuffY = py;
       }
     }

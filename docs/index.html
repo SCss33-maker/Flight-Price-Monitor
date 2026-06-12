@@ -458,6 +458,7 @@ init();
   let state = "idle";
   let px = 0, py = 0, prevx = 0, tx = innerWidth / 2, ty = innerHeight / 2;
   let heading = 0, speed = 0;            // 航向（弧度）與速度：飛機每幀最多轉一點點
+  let docked = false;                    // 已停在滑鼠上（機頭凍結，移遠才再出發）
   let rollStart = 0, rollFromX = 0, rollToX = 0, rollY = 0;
   let lastPuffX = 0, lastPuffY = 0;
   const ROLL_MS = 850;
@@ -485,7 +486,7 @@ init();
 
   // 降落鈕：呼叫小飛機飛回標題的老位置
   landBtn.addEventListener("click", () => {
-    if (state === "fly") state = "land";
+    if (state === "fly") { state = "land"; docked = false; }
   });
 
   function puff(x, y) {
@@ -520,35 +521,45 @@ init();
       }
       const dx = gx - px, dy = gy - py;
       const dist = Math.hypot(dx, dy);
+      const draw = () => plane.style.transform =
+        `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${heading * 180 / Math.PI + TILT}deg)`;
 
-      // 核心：每幀最多轉 maxTurn → 軌跡永遠是平滑大弧線；
-      // 離目標越近允許越急的小轉，才不會繞著目標打轉。
-      // 死區：距離 5px 內航向鎖定（零距離時方位角會亂跳，就是原地旋轉 bug 的成因）
-      if (dist > 5) {
-        const maxTurn = 0.032 + (1 - Math.min(dist / 160, 1)) * 0.28;
+      if (state === "land" && dist < 12) {
+        // 進場最後一哩：磁吸式輕輕貼上圖示原位，機頭不再變
+        px += dx * 0.18;
+        py += dy * 0.18;
+        speed = 0;
+        if (dist < 1.5) {
+          state = "done";                       // 降落完成：圖示回歸、本頁不再起飛
+          plane.style.opacity = "0";
+          titleIcon.style.visibility = "visible";
+          landBtn.disabled = true;
+          landBtn.textContent = "🛬 已降落";
+        } else draw();
+      } else if (docked) {
+        // 停妥在滑鼠上：機頭凍結在最後追上的姿態；滑鼠移出 30px 才再出發（遲滯防抖）
+        if (dist > 30) docked = false;
+      } else if (state === "fly" && dist < 10) {
+        // 進站：放棄轉向、保持機頭方向純滑行剎停——就算小幅滑過滑鼠也只是順勢停下，不掉頭
+        speed *= 0.55;
+        px += Math.cos(heading) * speed;
+        py += Math.sin(heading) * speed;
+        if (speed < 0.15) { speed = 0; docked = true; }
+        draw();
+      } else {
+        // 巡航：最小轉彎半徑 26px（轉向速率 ≤ 速度÷半徑）→ 物理上不可能原地甩頭
+        const maxTurn = Math.min(0.034, Math.max(speed / 26, 0.012));
         let diff = Math.atan2(dy, dx) - heading;
         diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;   // 正規化到 [-π, π]
         heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
         heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-      }
 
-      // 速度與距離成正比（接近就減速、貼住就懸停），平滑加減速
-      const want = dist <= 5 ? 0 : Math.min(dist * 0.05, maxSpeed);
-      speed += (want - speed) * 0.07;
-      if (speed < 0.05) speed = 0;
-      px += Math.cos(heading) * speed;
-      py += Math.sin(heading) * speed;
-
-      if (state === "land" && dist < 6 && speed < 0.8) {
-        // 降落完成：飛機收進標題、圖示重新出現，本頁不再起飛
-        state = "done";
-        plane.style.opacity = "0";
-        titleIcon.style.visibility = "visible";
-        landBtn.disabled = true;
-        landBtn.textContent = "🛬 已降落";
-      } else {
-        plane.style.transform =
-          `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${heading * 180 / Math.PI + TILT}deg)`;
+        // 等減速剎停曲線：提早減速，抵達時速度趨近 0，幾乎不會衝過頭；煞車比加速靈敏
+        const want = Math.min(maxSpeed, Math.sqrt(0.7 * Math.max(dist - 8, 0)));
+        speed += (want - speed) * (want < speed ? 0.25 : 0.06);
+        px += Math.cos(heading) * speed;
+        py += Math.sin(heading) * speed;
+        draw();
 
         // 尾流白雲：飛行中沿途留下、慢慢放大消散
         if (speed > 1.2 && Math.hypot(px - lastPuffX, py - lastPuffY) >= 12) {

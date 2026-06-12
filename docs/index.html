@@ -436,34 +436,36 @@ init();
   if (saved >= 1 && saved <= 100) slider.value = saved;
   valOut.textContent = slider.value;
 
-  // 滑桿(1~100) → 追逐係數(0.01~0.175)：數字越大追越快
-  const easeOf = s => 0.01 + (s - 1) / 99 * 0.165;
-  let ease = easeOf(+slider.value);
+  // 滑桿(1~100) → 巡航速度上限（px/幀）：數字越大飛越快
+  const speedOf = s => 2.5 + s * 0.13;
+  let maxSpeed = speedOf(+slider.value);
   slider.addEventListener("input", () => {
-    ease = easeOf(+slider.value);
+    maxSpeed = speedOf(+slider.value);
     valOut.textContent = slider.value;
     localStorage.setItem("planeSpeed", slider.value);
   });
 
-  // 狀態機：idle（待機）→ roll（沿標題滑行起飛）→ air（隨意繞圈、漸漸貼近）→ follow（跟著滑鼠）
+  // 狀態機：idle（待機）→ roll（沿標題文字滑行）→ fly（限制轉彎速率 → 永遠走圓滑弧線）
   let state = "idle";
-  let px = 0, py = 0, prevx = 0, prevy = 0, tx = innerWidth / 2, ty = innerHeight / 2;
-  let angle = 0, lastPuffX = 0, lastPuffY = 0;
+  let px = 0, py = 0, prevx = 0, tx = innerWidth / 2, ty = innerHeight / 2;
+  let heading = 0, speed = 0;            // 航向（弧度）與速度：飛機每幀最多轉一點點
   let rollStart = 0, rollFromX = 0, rollToX = 0, rollY = 0;
-  let cx = 0, cy = 0, phi = 0, radius = 0;   // air：繞圈圓心、相位、半徑
-  const ROLL_MS = 950;
+  let lastPuffX = 0, lastPuffY = 0;
+  const ROLL_MS = 850;
 
   addEventListener("mousemove", e => { tx = e.clientX; ty = e.clientY; });
 
-  // 第一次點滑鼠：標題那顆 ✈️ 真的飛走——沿「越南機票比價」這行字當跑道起飛
+  // 第一次點滑鼠：標題那顆 ✈️ 真的飛走——只用「✈️ 越南機票比價」這段文字的長度當跑道
   addEventListener("mousedown", e => {
     if (state !== "idle") return;
     const ir = titleIcon.getBoundingClientRect();
-    const tr = titleIcon.parentElement.getBoundingClientRect();  // 整行標題＝跑道
+    const range = document.createRange();                // 量「文字本身」的寬度，
+    range.selectNodeContents(titleIcon.parentElement);   // 不是整行 <h1>（那是整頁寬）
+    const tr = range.getBoundingClientRect();
     px = prevx = lastPuffX = ir.left + ir.width / 2;
-    py = prevy = lastPuffY = rollY = ir.top + ir.height / 2;
+    py = lastPuffY = rollY = ir.top + ir.height / 2;
     rollFromX = px;
-    rollToX = tr.right - 8;
+    rollToX = tr.right - 6;
     tx = e.clientX; ty = e.clientY;
     rollStart = performance.now();
     state = "roll";
@@ -481,45 +483,42 @@ init();
   }
 
   function loop(now) {
-    if (state !== "idle") {
-      prevx = px; prevy = py;
-
-      if (state === "roll") {
-        // 沿標題文字加速滑行（t² → 越滑越快），機頭維持水平
-        const t = Math.min((now - rollStart) / ROLL_MS, 1);
-        px = rollFromX + (rollToX - rollFromX) * t * t;
-        py = rollY;
-        if (t >= 1) {                 // 離地！銜接到繞圈飛行
-          state = "air";
-          cx = px; cy = py - 70;      // 圓心設在頭頂，起點正好接住目前位置
-          radius = 70;
-          phi = Math.PI / 2;
-        }
-      } else if (state === "air") {
-        // 沒有固定圈數：圓心緩緩飄向滑鼠、半徑慢慢縮小、轉速帶點呼吸感
-        cx += (tx - cx) * 0.012;
-        cy += (ty - cy) * 0.012;
-        phi -= 0.028 + 0.014 * Math.sin(now * 0.0007);
-        radius *= 0.9955;
-        const r = radius * (1 + 0.18 * Math.sin(now * 0.0009));
-        const gx = cx + r * Math.cos(phi), gy = cy + r * Math.sin(phi);
-        px += (gx - px) * 0.08;
-        py += (gy - py) * 0.08;
-        if (radius < 9) state = "follow";   // 圈圈縮到貼住滑鼠，自然轉為跟隨
-      } else {
-        // follow：緩緩追向滑鼠
-        px += (tx - px) * ease;
-        py += (ty - py) * ease;
+    if (state === "roll") {
+      // 沿標題文字加速滑行（t² → 越滑越快），機頭維持水平
+      const t = Math.min((now - rollStart) / ROLL_MS, 1);
+      prevx = px;
+      px = rollFromX + (rollToX - rollFromX) * t * t;
+      py = rollY;
+      plane.style.transform = `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${TILT}deg)`;
+      if (t >= 1) {
+        state = "fly";
+        heading = 0;                        // 離地航向＝跑道方向（朝右）
+        speed = Math.max(px - prevx, 3);    // 接住滑行末速，銜接無縫
       }
+    } else if (state === "fly") {
+      const dx = tx - px, dy = ty - py;
+      const dist = Math.hypot(dx, dy);
 
-      const mvx = px - prevx, mvy = py - prevy;
-      if (Math.hypot(mvx, mvy) > 0.1) angle = Math.atan2(mvy, mvx) * 180 / Math.PI;
-      plane.style.transform = `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${angle + TILT}deg)`;
+      // 核心：每幀最多轉 maxTurn → 軌跡永遠是平滑大弧線；
+      // 離滑鼠越近允許越急的小轉，才不會繞著滑鼠打轉
+      const maxTurn = 0.032 + (1 - Math.min(dist / 160, 1)) * 0.28;
+      let diff = Math.atan2(dy, dx) - heading;
+      diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;   // 正規化到 [-π, π]
+      heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+      heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
-      // 尾流白雲：離地後才有，沿途留下、慢慢放大消散
-      if (state !== "roll" && Math.hypot(px - lastPuffX, py - lastPuffY) >= 10) {
-        const len = Math.hypot(mvx, mvy) || 1;
-        puff(px - mvx / len * 14, py - mvy / len * 14);
+      // 速度與距離成正比（接近就減速、貼住就懸停），平滑加減速
+      const want = Math.min(dist * 0.05, maxSpeed);
+      speed += (want - speed) * 0.07;
+      px += Math.cos(heading) * speed;
+      py += Math.sin(heading) * speed;
+
+      plane.style.transform =
+        `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${heading * 180 / Math.PI + TILT}deg)`;
+
+      // 尾流白雲：飛行中沿途留下、慢慢放大消散
+      if (speed > 1.2 && Math.hypot(px - lastPuffX, py - lastPuffY) >= 12) {
+        puff(px - Math.cos(heading) * 14, py - Math.sin(heading) * 14);
         lastPuffX = px; lastPuffY = py;
       }
     }

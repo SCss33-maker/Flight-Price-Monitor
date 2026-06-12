@@ -676,6 +676,13 @@ init();
         if (escape && !unreachable && Math.abs(diff) < 2.4) escape = 0;
 
         let want = Math.min(maxSpeed, Math.sqrt(0.5 * Math.max(dist - 6, 0)));
+        // 進彎收油門：要轉的角度越大，速度上限越低 → 半徑 R=v/ω 跟著縮小，
+        // 轉完自然加速回巡航，不會以全速畫大圓飛出視窗外
+        const align = 1 - Math.min(Math.abs(diff) / Math.PI, 1);
+        want = Math.min(want, 1.8 + (maxSpeed - 1.8) * align * align * align);
+        // 可達性上限：保證轉彎圓直徑 2R=2v/0.034 ≤ 與滑鼠的距離 →
+        // 目標永遠不會藏進轉彎圈內，繞圈時速度遞減、必然收斂到滑鼠上
+        want = Math.min(want, dist * 0.017);
         if (escape) {
           heading += escape * maxTurn;                       // 持續讓圈（方向已承諾）
           want = Math.min(want, Math.max(0.9, speed * 0.9)); // 同步減速縮圈

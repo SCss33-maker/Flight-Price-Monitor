@@ -382,5 +382,70 @@ function renderTrend() {
 
 init();
 </script>
+
+<!-- 🛩️ 跟著滑鼠飛的小飛機 + 速度控制 -->
+<svg id="planeCursor" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+  <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" fill="#38bdf8"/>
+</svg>
+<div id="planeCtrl">
+  <span class="pc-title">✈️ 小飛機速度</span>
+  <input id="planeSpeed" type="range" min="1" max="100" value="18">
+  <span id="planeSpeedVal" class="pc-val">18</span>
+</div>
+<style>
+  #planeCursor {
+    position: fixed; left: 0; top: 0; z-index: 9998;
+    pointer-events: none; will-change: transform;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,.45));
+  }
+  #planeCtrl {
+    position: fixed; right: 16px; bottom: 16px; z-index: 9999;
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(30,41,59,.92); border: 1px solid #334155;
+    border-radius: 10px; padding: 8px 12px; font-size: 12px; color: #e2e8f0;
+    font-family: "Segoe UI","Microsoft JhengHei",system-ui,sans-serif;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35);
+  }
+  #planeCtrl .pc-title { color: #94a3b8; }
+  #planeCtrl input[type=range] { width: 96px; accent-color: #38bdf8; cursor: pointer; }
+  #planeCtrl .pc-val { width: 22px; text-align: right; color: #38bdf8; font-weight: 700; }
+  @media (hover: none) { #planeCursor, #planeCtrl { display: none; } }  /* 觸控裝置無滑鼠，隱藏 */
+  @media (max-width: 720px) { #planeCtrl { right: 10px; bottom: 10px; } }
+</style>
+<script>
+(function () {
+  const plane = document.getElementById("planeCursor");
+  const slider = document.getElementById("planeSpeed");
+  const valOut = document.getElementById("planeSpeedVal");
+
+  // 記住上次的速度設定
+  const saved = parseInt(localStorage.getItem("planeSpeed"), 10);
+  if (saved >= 1 && saved <= 100) slider.value = saved;
+  valOut.textContent = slider.value;
+
+  // 滑桿(1~100) → 追逐係數(0.02~0.35)：數字越大，飛機追上滑鼠越快
+  const easeOf = s => 0.02 + (s - 1) / 99 * 0.33;
+  let ease = easeOf(+slider.value);
+  slider.addEventListener("input", () => {
+    ease = easeOf(+slider.value);
+    valOut.textContent = slider.value;
+    localStorage.setItem("planeSpeed", slider.value);
+  });
+
+  // 起始停在畫面中央，慢慢追向滑鼠
+  let px = innerWidth / 2, py = innerHeight / 2, tx = px, ty = py, angle = 0;
+  addEventListener("mousemove", e => { tx = e.clientX; ty = e.clientY; });
+
+  (function loop() {
+    const dx = tx - px, dy = ty - py;
+    px += dx * ease;
+    py += dy * ease;
+    // 機頭轉向移動方向（SVG 原圖朝上，故 +90 度）
+    if (Math.hypot(dx, dy) > 1.5) angle = Math.atan2(dy, dx) * 180 / Math.PI + 90;
+    plane.style.transform = `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${angle}deg)`;
+    requestAnimationFrame(loop);
+  })();
+})();
+</script>
 </body>
 </html>

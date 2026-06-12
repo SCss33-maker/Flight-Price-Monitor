@@ -389,6 +389,7 @@ init();
   <span class="pc-title">✈️ 小飛機速度</span>
   <input id="planeSpeed" type="range" min="1" max="100" value="18">
   <span id="planeSpeedVal" class="pc-val">18</span>
+  <button id="planeLand" title="讓小飛機飛回標題降落">🛬 降落</button>
 </div>
 <style>
   #planeCursor {
@@ -418,6 +419,13 @@ init();
   #planeCtrl .pc-title { color: #94a3b8; }
   #planeCtrl input[type=range] { width: 96px; accent-color: #38bdf8; cursor: pointer; }
   #planeCtrl .pc-val { width: 22px; text-align: right; color: #38bdf8; font-weight: 700; }
+  #planeCtrl button {
+    background: transparent; border: 1px solid #334155; color: #e2e8f0;
+    border-radius: 7px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+    font-family: inherit;
+  }
+  #planeCtrl button:hover { border-color: #38bdf8; color: #38bdf8; }
+  #planeCtrl button:disabled { opacity: .45; cursor: default; }
   @media (hover: none) { #planeCursor, #planeCtrl { display: none; } }  /* 觸控裝置無滑鼠，隱藏 */
   @media (max-width: 720px) { #planeCtrl { right: 10px; bottom: 10px; } }
 </style>
@@ -427,6 +435,7 @@ init();
   const slider = document.getElementById("planeSpeed");
   const valOut = document.getElementById("planeSpeedVal");
   const titleIcon = document.getElementById("titleIcon");
+  const landBtn = document.getElementById("planeLand");
 
   // Segoe 的 ✈️ 機頭本來就朝右上約 45°，旋轉時加回補償讓機頭對準飛行方向
   const TILT = 45;
@@ -458,6 +467,7 @@ init();
   // 第一次點滑鼠：標題那顆 ✈️ 真的飛走——只用「✈️ 越南機票比價」這段文字的長度當跑道
   addEventListener("mousedown", e => {
     if (state !== "idle") return;
+    if (e.target.closest && e.target.closest("#planeCtrl")) return;  // 點控制面板不算起飛指令
     const ir = titleIcon.getBoundingClientRect();
     const range = document.createRange();                // 量「文字本身」的寬度，
     range.selectNodeContents(titleIcon.parentElement);   // 不是整行 <h1>（那是整頁寬）
@@ -471,6 +481,11 @@ init();
     state = "roll";
     titleIcon.style.visibility = "hidden";   // 圖示消失＝飛機離開了原位
     plane.style.opacity = "1";
+  });
+
+  // 降落鈕：呼叫小飛機飛回標題的老位置
+  landBtn.addEventListener("click", () => {
+    if (state === "fly") state = "land";
   });
 
   function puff(x, y) {
@@ -495,31 +510,51 @@ init();
         heading = 0;                        // 離地航向＝跑道方向（朝右）
         speed = Math.max(px - prevx, 3);    // 接住滑行末速，銜接無縫
       }
-    } else if (state === "fly") {
-      const dx = tx - px, dy = ty - py;
+    } else if (state === "fly" || state === "land") {
+      // 目標：飛行時是滑鼠；降落時是標題圖示的位置（每幀重算，捲動頁面也跟得到）
+      let gx = tx, gy = ty;
+      if (state === "land") {
+        const r = titleIcon.getBoundingClientRect();
+        gx = r.left + r.width / 2;
+        gy = r.top + r.height / 2;
+      }
+      const dx = gx - px, dy = gy - py;
       const dist = Math.hypot(dx, dy);
 
       // 核心：每幀最多轉 maxTurn → 軌跡永遠是平滑大弧線；
-      // 離滑鼠越近允許越急的小轉，才不會繞著滑鼠打轉
-      const maxTurn = 0.032 + (1 - Math.min(dist / 160, 1)) * 0.28;
-      let diff = Math.atan2(dy, dx) - heading;
-      diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;   // 正規化到 [-π, π]
-      heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
-      heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      // 離目標越近允許越急的小轉，才不會繞著目標打轉。
+      // 死區：距離 5px 內航向鎖定（零距離時方位角會亂跳，就是原地旋轉 bug 的成因）
+      if (dist > 5) {
+        const maxTurn = 0.032 + (1 - Math.min(dist / 160, 1)) * 0.28;
+        let diff = Math.atan2(dy, dx) - heading;
+        diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;   // 正規化到 [-π, π]
+        heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+        heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      }
 
       // 速度與距離成正比（接近就減速、貼住就懸停），平滑加減速
-      const want = Math.min(dist * 0.05, maxSpeed);
+      const want = dist <= 5 ? 0 : Math.min(dist * 0.05, maxSpeed);
       speed += (want - speed) * 0.07;
+      if (speed < 0.05) speed = 0;
       px += Math.cos(heading) * speed;
       py += Math.sin(heading) * speed;
 
-      plane.style.transform =
-        `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${heading * 180 / Math.PI + TILT}deg)`;
+      if (state === "land" && dist < 6 && speed < 0.8) {
+        // 降落完成：飛機收進標題、圖示重新出現，本頁不再起飛
+        state = "done";
+        plane.style.opacity = "0";
+        titleIcon.style.visibility = "visible";
+        landBtn.disabled = true;
+        landBtn.textContent = "🛬 已降落";
+      } else {
+        plane.style.transform =
+          `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${heading * 180 / Math.PI + TILT}deg)`;
 
-      // 尾流白雲：飛行中沿途留下、慢慢放大消散
-      if (speed > 1.2 && Math.hypot(px - lastPuffX, py - lastPuffY) >= 12) {
-        puff(px - Math.cos(heading) * 14, py - Math.sin(heading) * 14);
-        lastPuffX = px; lastPuffY = py;
+        // 尾流白雲：飛行中沿途留下、慢慢放大消散
+        if (speed > 1.2 && Math.hypot(px - lastPuffX, py - lastPuffY) >= 12) {
+          puff(px - Math.cos(heading) * 14, py - Math.sin(heading) * 14);
+          lastPuffX = px; lastPuffY = py;
+        }
       }
     }
     requestAnimationFrame(loop);

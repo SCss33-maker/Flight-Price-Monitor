@@ -515,6 +515,7 @@ init();
   let docked = false;                    // 已停在滑鼠上（機頭凍結，移遠才再出發）
   let parking = false;                   // 進站中（持續到停妥，不會中途脫離）
   let flipped = false;                   // 朝左飛時垂直鏡像，避免肚皮朝天
+  let escape = 0;                        // 讓圈方向（0=正常追蹤；±1=滑鼠在轉彎圈內，往外讓）
   let rollStart = 0, rollFromX = 0, rollToX = 0, rollY = 0;
   let lastPuffX = 0, lastPuffY = 0;
   const ROLL_MS = 850;
@@ -551,7 +552,7 @@ init();
 
   // 降落鈕：呼叫小飛機回場降落
   landBtn.addEventListener("click", () => {
-    if (state === "fly") { state = "land"; docked = false; parking = false; }
+    if (state === "fly") { state = "land"; docked = false; parking = false; escape = 0; }
   });
 
   function puff(x, y) {
@@ -588,7 +589,7 @@ init();
         tdX = range.getBoundingClientRect().right - 6;
       }
       let gx = tx, gy = ty;
-      if (state === "land") { gx = Math.min(tdX + 230, innerWidth - 24); gy = iy - 80; }
+      if (state === "land") { gx = Math.min(tdX + 240, innerWidth - 24); gy = iy - 150; }
       else if (state === "final") { gx = tdX; gy = iy; }
       else if (state === "rollout") { gx = ix; gy = iy; }
       const dx = gx - px, dy = gy - py;
@@ -604,23 +605,40 @@ init();
       };
 
       if (state === "rollout") {
-        // 觸地後：沿標題向左滑行減速、停回圖示原位——起飛的倒帶
-        px += dx * 0.045;
+        // 觸地後：帶著觸地速度沿標題向左滑行，等減速度剎車、恰好停在圖示原位（速度全程連續）
+        const remain = Math.max(px - ix, 0.001);
+        const brake = (speed * speed) / (2 * remain);      // 物理：v²/2d ＝恰好停在機坪的減速度
+        speed = Math.max(speed - brake, 0.35);
+        px -= speed;
         py = iy;
-        heading = Math.PI;
-        speed = 0;
-        if (Math.abs(dx) < 1.2) finishLanding(); else draw();
-      } else if (state === "final") {
-        // 最後進場：從右側對正跑道（機頭朝左），沿淺下滑道滑向「價」字端觸地
-        px += dx * 0.055;
-        py += dy * 0.085;                          // 垂直收斂稍快 → 進場軌跡越來越平
-        let hd = Math.PI - heading;                // 機頭緩緩轉向跑道方向（取短邊）
+        let hd = Math.PI - heading;                        // 觸地拉平（小小的 flare）
         hd = ((hd + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-        heading += hd * 0.09;
+        heading += hd * 0.25;
         heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-        speed = 0;
-        if (dist < 2) state = "rollout"; else draw();
-      } else if (state === "land" && dist < 26) {
+        if (px - ix < 2) finishLanding(); else draw();
+      } else if (state === "final") {
+        // 最後進場：沿用同一套速度模型（不瞬移），以固定進場速度、限制轉率轉向觸地點
+        const maxTurn = 0.05;
+        let diff = Math.atan2(dy, dx) - heading;
+        diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+        heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        speed += (2.6 - speed) * 0.06;                     // 緩緩收斂到進場速度
+        px += Math.cos(heading) * speed;
+        py += Math.sin(heading) * speed;
+        if (py > iy - 4 && dist > 24) {                    // 低高度保護：貼著跑道上方平飛找觸地點
+          py = iy - 4;
+          let hl = Math.PI - heading;
+          hl = ((hl + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+          heading += hl * 0.2;
+          heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        }
+        if (dist < 10 || (py >= iy - 4 && Math.abs(px - tdX) < 14)) {
+          py = iy;                                          // 觸地！速度原封不動帶進滑行
+          state = "rollout";
+        }
+        draw();
+      } else if (state === "land" && dist < 30) {
         state = "final";                           // 抵達定位點 → 轉入最後進場
       } else if (docked) {
         // 停妥在滑鼠上：機頭凍結在最後追上的姿態；滑鼠移出 30px 才再出發（遲滯防抖）
@@ -628,6 +646,7 @@ init();
       } else if (state === "fly" && (parking || dist < 10)) {
         // 進站（旗標保持，直到停妥才解除）：保持機頭方向滑行剎停＋微吸附，保證停在滑鼠上
         parking = true;
+        escape = 0;
         if (dist > 34) {
           parking = false;                         // 滑鼠跑遠了，取消進站、回到巡航
         } else {
@@ -643,21 +662,29 @@ init();
         let diff = Math.atan2(dy, dx) - heading;
         diff = ((diff + Math.PI * 3) % (Math.PI * 2)) - Math.PI;   // 正規化到 [-π, π]
 
-        // 目標在「即將轉向那一側」的最小轉彎圓內 → 物理上轉不到，會無限繞圈。
-        // 解法：看目標陷入圓內多深，平滑地由「朝目標轉」過渡為「往外側讓圈」，
-        // 把轉彎圓漂移到目標剛好落在圓周上 → 繞回來時自然撞上目標（半徑不變）
-        const side = diff >= 0 ? 1 : -1;
+        // 目標躲在「即將轉向那一側」的轉彎圓內 → 物理上轉不到，會無限繞圈。
+        // 解法（兩件事一起做，方向一旦決定就承諾到底，不每幀搖擺）：
+        //   1. 往外側讓圈：把轉彎圓從目標身上漂開
+        //   2. 同時減速：半徑 R=速度÷轉率，速度降圈就縮（最小縮到 26px 下限）
+        // 圈一縮小目標就落回圈外，恢復追蹤時自然一個彎接上。
         const R = speed / maxTurn;
+        const side = diff >= 0 ? 1 : -1;
         const ccx = px + Math.cos(heading + side * Math.PI / 2) * R;
         const ccy = py + Math.sin(heading + side * Math.PI / 2) * R;
-        const toC = Math.hypot(gx - ccx, gy - ccy);
-        const k = Math.max(0, Math.min(1, (toC - R * 0.72) / (R * 0.33)));  // 0=深陷圓心 1=圓外
-        if (k >= 1) heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
-        else heading += side * maxTurn * (2 * k - 1);
+        const unreachable = Math.hypot(gx - ccx, gy - ccy) < R * 0.96;
+        if (!escape && unreachable && dist > 12) escape = -side;
+        if (escape && !unreachable && Math.abs(diff) < 2.4) escape = 0;
+
+        let want = Math.min(maxSpeed, Math.sqrt(0.5 * Math.max(dist - 6, 0)));
+        if (escape) {
+          heading += escape * maxTurn;                       // 持續讓圈（方向已承諾）
+          want = Math.min(want, Math.max(0.9, speed * 0.9)); // 同步減速縮圈
+        } else {
+          heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+        }
         heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
         // 等減速剎停曲線：更早、更緩地減速，靠近時自然慢下來
-        const want = Math.min(maxSpeed, Math.sqrt(0.5 * Math.max(dist - 6, 0)));
         speed += (want - speed) * (want < speed ? 0.18 : 0.06);
         px += Math.cos(heading) * speed;
         py += Math.sin(heading) * speed;

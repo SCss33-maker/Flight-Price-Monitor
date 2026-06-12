@@ -120,6 +120,10 @@
         <button data-m="estWithBag" class="on">含 20kg 行李估算</button>
         <button data-m="price">票面價</button>
       </div>
+      <div class="toggle" id="stopToggle">
+        <button data-s="direct" class="on">只看直飛</button>
+        <button data-s="any">含轉機</button>
+      </div>
       <div class="spacer"></div>
       <div class="meta-note" id="metaNote"></div>
     </div>
@@ -146,7 +150,7 @@
       <h2>出發日價格月曆（5 天 4 夜來回總價・點日期看明細）</h2>
       <div class="months" id="months"></div>
       <div class="legend">便宜 <b id="legMin">—</b> <span class="scale"></span> <b id="legMax">—</b> 貴
-        　<span class="muted">（SGN／DAD 共用色階）　★ = 本航線最低　灰色 = 無資料</span></div>
+        　<span class="muted">（SGN／DAD 共用色階）　★ = 本航線最低　灰色 = 無資料<span id="modeNote"></span></span></div>
       <div class="detail" id="detailBox"></div>
     </div>
 
@@ -180,7 +184,20 @@
 let DATA = null;
 let route = null;          // 目前分頁的航線 key，如 "TPE-SGN"
 let metric = "estWithBag"; // 或 "price"
+let mode = localStorage.getItem("stopMode") || "direct";  // "direct"＝只看直飛、"any"＝含轉機
 let trendChart = null;
+
+// 取出一筆日期紀錄在目前模式下的報價。
+// 新資料每天存 {any, direct} 兩筆；舊資料是單筆 → 直飛模式只認 stops===0 的舊紀錄。
+function variantOf(rec) {
+  if (!rec) return null;
+  if (mode === "direct") {
+    const v = rec.direct !== undefined ? rec.direct : (rec.stops === 0 ? rec : null);
+    return v ? { ...v, returnDate: rec.returnDate } : null;
+  }
+  const v = rec.any || rec;
+  return { ...v, returnDate: rec.returnDate };
+}
 
 const $ = id => document.getElementById(id);
 const fmtMoney = n => "NT$ " + Math.round(n).toLocaleString();
@@ -192,12 +209,15 @@ function airlineName(code) {
   return (DATA.meta.airlineNames || {})[code] || code;
 }
 
-// 把「所有航線、目前口徑」的價格收集起來排序，讓 SGN/DAD 共用同一個顏色尺度
+// 把「所有航線、目前口徑與模式」的價格收集起來排序，讓 SGN/DAD 共用同一個顏色尺度
 function globalSorted() {
   const vals = [];
   for (const k in DATA.routes) {
     const lat = DATA.routes[k].latest || {};
-    for (const d in lat) vals.push(lat[d][metric]);
+    for (const d in lat) {
+      const v = variantOf(lat[d]);
+      if (v) vals.push(v[metric]);
+    }
   }
   return vals.sort((a, b) => a - b);
 }
@@ -249,6 +269,9 @@ function buildTabs(keys) {
   $("metricToggle").querySelectorAll("button").forEach(b => {
     b.onclick = () => { metric = b.dataset.m; render(); };
   });
+  $("stopToggle").querySelectorAll("button").forEach(b => {
+    b.onclick = () => { mode = b.dataset.s; localStorage.setItem("stopMode", mode); render(); };
+  });
 }
 
 function render() {
@@ -256,12 +279,41 @@ function render() {
     b.classList.toggle("on", b.dataset.r === route));
   document.querySelectorAll("#metricToggle button").forEach(b =>
     b.classList.toggle("on", b.dataset.m === metric));
+  document.querySelectorAll("#stopToggle button").forEach(b =>
+    b.classList.toggle("on", b.dataset.s === mode));
   $("detailBox").className = "detail";
 
   const r = DATA.routes[route];
-  const entries = Object.entries(r.latest).sort((a, b) => a[0].localeCompare(b[0]));
+  $("statScan").textContent = r.lastScan || "—";
+  $("statScanInfo").textContent = "每兩週完整掃描一次（未來 60 天每一天）";
+  $("metaNote").textContent = `資料更新：${(DATA.meta.updatedAt || "").slice(0, 10)}`;
+
+  const totalDates = Object.keys(r.latest).length;
+  const entries = Object.entries(r.latest)
+    .map(([d, rec]) => [d, variantOf(rec)])
+    .filter(([, v]) => v)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+
+  // 直飛模式下提醒：舊資料只存單筆最低價，部分日期還沒有直飛報價（下次掃描補齊）
+  $("modeNote").textContent = (mode === "direct" && entries.length < totalDates)
+    ? `・有 ${totalDates - entries.length} 天尚無直飛資料（顯示灰色），下次掃描後補齊`
+    : "";
+
+  if (!entries.length) {
+    $("statMin").textContent = "—";
+    $("statMinInfo").textContent = "目前模式下沒有資料";
+    $("statAvg").textContent = "—";
+    $("statAvgInfo").textContent = "";
+    $("legMin").textContent = "—";
+    $("legMax").textContent = "—";
+    $("months").innerHTML = "";
+    $("cheapBody").innerHTML = "";
+    renderTrend();
+    return;
+  }
+
   const vals = entries.map(([, v]) => v[metric]);
-  const min = Math.min(...vals), max = Math.max(...vals);
+  const min = Math.min(...vals);
   const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
   const minEntry = entries.find(([, v]) => v[metric] === min);
 
@@ -269,9 +321,6 @@ function render() {
   $("statMinInfo").textContent = `${minEntry[0]}（${wd(minEntry[0])}）出發・${airlineName(minEntry[1].airline)}`;
   $("statAvg").textContent = fmtMoney(avg);
   $("statAvgInfo").textContent = `${entries[0][0]} ~ ${entries[entries.length - 1][0]}・共 ${entries.length} 個出發日`;
-  $("statScan").textContent = r.lastScan || "—";
-  $("statScanInfo").textContent = "每兩週完整掃描一次（未來 60 天每一天）";
-  $("metaNote").textContent = `資料更新：${(DATA.meta.updatedAt || "").slice(0, 10)}`;
 
   // 跨航線共用的色階：圖例兩端標上全域最低/最高
   const sorted = globalSorted();
@@ -315,12 +364,15 @@ function renderCalendar(entries, routeMin, sorted) {
 function showDetail(iso, cell) {
   document.querySelectorAll(".cell.sel").forEach(c => c.classList.remove("sel"));
   cell.classList.add("sel");
-  const rec = DATA.routes[route].latest[iso];
+  const v = variantOf(DATA.routes[route].latest[iso]);
+  if (!v) return;
   const hist = (DATA.routes[route].datePriceHistory || {})[iso] || [];
+  // 取目前模式對應的歷史價：新紀錄是 [掃描日, 全部最低, 直飛最低]，舊紀錄只有前兩欄
+  const series = hist.map(h => (mode === "direct" ? (h.length > 2 ? h[2] : null) : h[1]))
+                     .filter(x => x != null);
   let trendNote = "";
-  if (hist.length >= 2) {
-    const prev = hist[hist.length - 2][1];
-    const diff = rec.price - prev;
+  if (series.length >= 2) {
+    const diff = v.price - series[series.length - 2];
     if (diff > 0) trendNote = `，比上次掃描 <span style="color:var(--bad)">▲ ${diff.toLocaleString()}</span>`;
     else if (diff < 0) trendNote = `，比上次掃描 <span style="color:var(--good)">▼ ${(-diff).toLocaleString()}</span>`;
     else trendNote = "，與上次掃描相同";
@@ -328,12 +380,12 @@ function showDetail(iso, cell) {
   const box = $("detailBox");
   box.className = "detail show";
   box.innerHTML =
-    `<b>${iso}（${wd(iso)}）出發 → ${rec.returnDate}（${wd(rec.returnDate)}）回</b>　` +
-    `${airlineName(rec.airline)}・${rec.stops === 0 ? "直飛" : rec.stops + " 轉"}　|　` +
-    `票面 ${fmtMoney(rec.price)}　` +
-    (rec.bagIncluded
+    `<b>${iso}（${wd(iso)}）出發 → ${v.returnDate}（${wd(v.returnDate)}）回</b>　` +
+    `${airlineName(v.airline)}・${v.stops === 0 ? "直飛" : v.stops + " 轉"}　|　` +
+    `票面 ${fmtMoney(v.price)}　` +
+    (v.bagIncluded
       ? `<span class="pill bag">已含托運行李</span>`
-      : `含行李估算 <b>${fmtMoney(rec.estWithBag)}</b> <span class="pill nobag">票價不含托運</span>`) +
+      : `含行李估算 <b>${fmtMoney(v.estWithBag)}</b> <span class="pill nobag">票價不含托運</span>`) +
     trendNote;
 }
 
@@ -357,7 +409,9 @@ function renderTrend() {
   const labels = [...new Set(keys.flatMap(k =>
     (DATA.routes[k].minHistory || []).map(h => h[0])))].sort();
   const datasets = keys.map((k, i) => {
-    const byScan = Object.fromEntries((DATA.routes[k].minHistory || []).map(h => [h[0], h[1]]));
+    // minHistory 一筆 = [掃描日, 全部最低, 其日期, 直飛最低, 其日期]；舊紀錄沒有後兩欄
+    const byScan = Object.fromEntries((DATA.routes[k].minHistory || [])
+      .map(h => [h[0], mode === "direct" ? (h[3] ?? null) : h[1]]));
     return {
       label: k.replace("-", "→"),
       data: labels.map(l => byScan[l] ?? null),
@@ -387,8 +441,8 @@ init();
 <div id="planeCursor" aria-hidden="true">✈️</div>
 <div id="planeCtrl">
   <span class="pc-title">✈️ 小飛機速度</span>
-  <input id="planeSpeed" type="range" min="1" max="100" value="18">
-  <span id="planeSpeedVal" class="pc-val">18</span>
+  <input id="planeSpeed" type="range" min="1" max="100" value="1">
+  <span id="planeSpeedVal" class="pc-val">1</span>
   <button id="planeLand" title="讓小飛機飛回標題降落">🛬 降落</button>
 </div>
 <style>
@@ -540,11 +594,11 @@ init();
         // 停妥在滑鼠上：機頭凍結在最後追上的姿態；滑鼠移出 30px 才再出發（遲滯防抖）
         if (dist > 30) docked = false;
       } else if (state === "fly" && dist < 10) {
-        // 進站：放棄轉向、保持機頭方向純滑行剎停——就算小幅滑過滑鼠也只是順勢停下，不掉頭
-        speed *= 0.55;
+        // 進站：放棄轉向、保持機頭方向緩緩滑行——像飛機滑進停機位那樣溫柔地停下
+        speed *= 0.92;
         px += Math.cos(heading) * speed;
         py += Math.sin(heading) * speed;
-        if (speed < 0.15) { speed = 0; docked = true; }
+        if (speed < 0.12) { speed = 0; docked = true; }
         draw();
       } else {
         // 巡航：最小轉彎半徑 26px（轉向速率 ≤ 速度÷半徑）→ 物理上不可能原地甩頭
@@ -554,9 +608,9 @@ init();
         heading += Math.max(-maxTurn, Math.min(maxTurn, diff));
         heading = ((heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
 
-        // 等減速剎停曲線：提早減速，抵達時速度趨近 0，幾乎不會衝過頭；煞車比加速靈敏
-        const want = Math.min(maxSpeed, Math.sqrt(0.7 * Math.max(dist - 8, 0)));
-        speed += (want - speed) * (want < speed ? 0.25 : 0.06);
+        // 等減速剎停曲線：更早、更緩地減速，靠近時自然慢下來
+        const want = Math.min(maxSpeed, Math.sqrt(0.5 * Math.max(dist - 6, 0)));
+        speed += (want - speed) * (want < speed ? 0.18 : 0.06);
         px += Math.cos(heading) * speed;
         py += Math.sin(heading) * speed;
         draw();

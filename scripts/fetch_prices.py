@@ -180,22 +180,37 @@ def main():
             if not offers:
                 print(f"  {route_key} {depart}: 無報價", flush=True)
                 continue
-            best = min((summarize(o, cfg, legs) for o in offers), key=lambda s: s["estWithBag"])
-            best["returnDate"] = ret.isoformat()
-            print(f"  [{used}/{budget}] {route_key} {depart}: {best['price']} {best['airline']}"
-                  f"{'' if best['bagIncluded'] else '＋行李'}", flush=True)
-            scanned[depart.isoformat()] = best
+            # 一次呼叫的回應同時含直飛與轉機 → 各取最低，前端可切換顯示（不多花額度）
+            sums = [summarize(o, cfg, legs) for o in offers]
+            best_any = min(sums, key=lambda s: s["estWithBag"])
+            directs = [s for s in sums if s["stops"] == 0]
+            best_direct = min(directs, key=lambda s: s["estWithBag"]) if directs else None
+            rec = {"returnDate": ret.isoformat(), "any": best_any, "direct": best_direct}
+            note = f"｜直飛 {best_direct['price']}" if best_direct else "｜無直飛"
+            print(f"  [{used}/{budget}] {route_key} {depart}: {best_any['price']} {best_any['airline']}"
+                  f"{'' if best_any['bagIncluded'] else '＋行李'}{note}", flush=True)
+            scanned[depart.isoformat()] = rec
             history = route["datePriceHistory"].setdefault(depart.isoformat(), [])
-            history.append([today_iso, best["price"]])
+            history.append([today_iso, best_any["price"],
+                            best_direct["price"] if best_direct else None])
             del history[:-60]
 
         if scanned:
             route["latest"].update(scanned)
-            min_date, min_rec = min(scanned.items(), key=lambda kv: kv[1]["estWithBag"])
-            route["minHistory"].append([today_iso, min_rec["estWithBag"], min_date])
+            min_date, min_rec = min(scanned.items(), key=lambda kv: kv[1]["any"]["estWithBag"])
+            directs = {d: r["direct"] for d, r in scanned.items() if r["direct"]}
+            if directs:
+                dmin_date, dmin = min(directs.items(), key=lambda kv: kv[1]["estWithBag"])
+                dmin_est = dmin["estWithBag"]
+            else:
+                dmin_date, dmin_est = None, None
+            # minHistory 一筆 = [掃描日, 全部最低, 其日期, 直飛最低, 其日期]
+            route["minHistory"].append(
+                [today_iso, min_rec["any"]["estWithBag"], min_date, dmin_est, dmin_date])
             del route["minHistory"][:-180]
             route["lastScan"] = today_iso
-            print(f"{route_key}: 掃到 {len(scanned)} 個出發日，最低 {min_rec['estWithBag']} ({min_date})")
+            print(f"{route_key}: 掃到 {len(scanned)} 個出發日，"
+                  f"最低 {min_rec['any']['estWithBag']} ({min_date})，直飛最低 {dmin_est or '—'}")
         else:
             print(f"{route_key}: 沒掃到任何報價")
 

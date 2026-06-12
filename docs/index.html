@@ -109,7 +109,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>✈️ 越南機票比價</h1>
+  <h1><span id="titleIcon">✈️</span> 越南機票比價</h1>
   <div class="sub" id="subtitle">載入中…</div>
   <div id="bannerBox"></div>
 
@@ -394,9 +394,19 @@ init();
 </div>
 <style>
   #planeCursor {
-    position: fixed; left: 0; top: 0; z-index: 9998;
+    position: fixed; left: 0; top: 0; z-index: 9998; opacity: 0;
     pointer-events: none; will-change: transform;
     filter: drop-shadow(0 2px 3px rgba(0,0,0,.45));
+  }
+  .contrail {
+    position: fixed; z-index: 9997; width: 12px; height: 12px;
+    margin: -6px 0 0 -6px; border-radius: 50%; pointer-events: none;
+    background: radial-gradient(circle, rgba(255,255,255,.6), rgba(255,255,255,0) 70%);
+    animation: contrailFade 1.5s ease-out forwards;
+  }
+  @keyframes contrailFade {
+    from { opacity: .6; transform: scale(.5); }
+    to   { opacity: 0;  transform: scale(2.4); }
   }
   #planeCtrl {
     position: fixed; right: 16px; bottom: 16px; z-index: 9999;
@@ -417,14 +427,15 @@ init();
   const plane = document.getElementById("planeCursor");
   const slider = document.getElementById("planeSpeed");
   const valOut = document.getElementById("planeSpeedVal");
+  const titleIcon = document.getElementById("titleIcon");
 
   // 記住上次的速度設定
   const saved = parseInt(localStorage.getItem("planeSpeed"), 10);
   if (saved >= 1 && saved <= 100) slider.value = saved;
   valOut.textContent = slider.value;
 
-  // 滑桿(1~100) → 追逐係數(0.02~0.35)：數字越大，飛機追上滑鼠越快
-  const easeOf = s => 0.02 + (s - 1) / 99 * 0.33;
+  // 滑桿(1~100) → 追逐係數(0.01~0.175)：數字越大追越快（整體比上一版慢一半）
+  const easeOf = s => 0.01 + (s - 1) / 99 * 0.165;
   let ease = easeOf(+slider.value);
   slider.addEventListener("input", () => {
     ease = easeOf(+slider.value);
@@ -432,19 +443,64 @@ init();
     localStorage.setItem("planeSpeed", slider.value);
   });
 
-  // 起始停在畫面中央，慢慢追向滑鼠
-  let px = innerWidth / 2, py = innerHeight / 2, tx = px, ty = py, angle = 0;
+  let state = "idle";              // idle → intro（從標題飛出繞圈）→ follow（跟滑鼠）
+  let px = 0, py = 0, prevx = 0, prevy = 0, tx = innerWidth / 2, ty = innerHeight / 2;
+  let angle = 0, introStart = 0, cx = 0, cy = 0;
+  let lastPuffX = 0, lastPuffY = 0;
+  const INTRO_MS = 2800, LOOPS = 2.5;
+
   addEventListener("mousemove", e => { tx = e.clientX; ty = e.clientY; });
 
-  (function loop() {
-    const dx = tx - px, dy = ty - py;
-    px += dx * ease;
-    py += dy * ease;
-    // 機頭轉向移動方向（SVG 原圖朝上，故 +90 度）
-    if (Math.hypot(dx, dy) > 1.5) angle = Math.atan2(dy, dx) * 180 / Math.PI + 90;
-    plane.style.transform = `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${angle}deg)`;
+  // 第一次點滑鼠：小飛機從標題那顆 ✈️ 飛出來
+  addEventListener("mousedown", e => {
+    if (state !== "idle") return;
+    const r = titleIcon.getBoundingClientRect();
+    px = prevx = lastPuffX = r.left + r.width / 2;
+    py = prevy = lastPuffY = r.top + r.height / 2;
+    cx = px + 60; cy = py;            // 繞圈圓心：讓起點正好落在標題圖示上
+    tx = e.clientX; ty = e.clientY;
+    introStart = performance.now();
+    state = "intro";
+    plane.style.opacity = "1";
+  }, { once: false });
+
+  function puff(x, y) {
+    const d = document.createElement("div");
+    d.className = "contrail";
+    d.style.left = x + "px";
+    d.style.top = y + "px";
+    document.body.appendChild(d);
+    setTimeout(() => d.remove(), 1500);
+  }
+
+  function loop(now) {
+    if (state !== "idle") {
+      prevx = px; prevy = py;
+      if (state === "intro") {
+        const prog = Math.min((now - introStart) / INTRO_MS, 1);
+        const ang = prog * LOOPS * Math.PI * 2;
+        const R = 60 + 40 * prog;                 // 邊繞邊往外鬆開一點
+        px = cx + R * Math.cos(ang + Math.PI);    // 從標題位置起飛
+        py = cy + R * Math.sin(ang + Math.PI);
+        if (prog >= 1) state = "follow";
+      } else {                                     // follow：緩緩追向滑鼠
+        px += (tx - px) * ease;
+        py += (ty - py) * ease;
+      }
+      const mvx = px - prevx, mvy = py - prevy;
+      if (Math.hypot(mvx, mvy) > 0.1) angle = Math.atan2(mvy, mvx) * 180 / Math.PI + 90;
+      plane.style.transform = `translate(${px}px,${py}px) translate(-50%,-50%) rotate(${angle}deg)`;
+
+      // 尾流：每移動一小段就在機尾留一朵白雲，隨後慢慢消散
+      if (Math.hypot(px - lastPuffX, py - lastPuffY) >= 10) {
+        const len = Math.hypot(mvx, mvy) || 1;
+        puff(px - mvx / len * 12, py - mvy / len * 12);
+        lastPuffX = px; lastPuffY = py;
+      }
+    }
     requestAnimationFrame(loop);
-  })();
+  }
+  requestAnimationFrame(loop);
 })();
 </script>
 </body>

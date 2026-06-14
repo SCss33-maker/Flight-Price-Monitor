@@ -23,7 +23,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 截止閘門：2026-09 為最後一次掃描，之後排程照樣觸發但整個 scan 工作被跳過
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        run: |
+          if [ "$(date -u +%Y%m)" -le "202609" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "已過 2026-09，停止掃描"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   scan:
+    needs: guard
+    if: needs.guard.outputs.run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
